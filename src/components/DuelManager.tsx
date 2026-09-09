@@ -398,7 +398,7 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
             DUELOS ENTRE AMIGOS
           </h1>
           <p className="text-sm text-[#264653]">
-            Competí en tiempo real con tus amigos usando los organismos de tu laboratorio.
+            Competí en duelos 1 vs 1 en tiempo real con tus amigos usando los organismos de tu laboratorio.
           </p>
         </div>
 
@@ -461,7 +461,7 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
           <div className="bg-white border-3 border-[#264653] rounded-xl p-4 shadow text-center">
             <h3 className="font-bold text-lg text-[#264653] mb-1">👑 CREAR NUEVA SALA</h3>
             <p className="text-xs text-gray-600 mb-3">
-              Creá una sala y compartile el código o enlace directo a tus amigos para que jueguen contra vos.
+              Creá una sala y compartile el código o enlace directo a tu amigo. Con solo 2 jugadores ya compiten 1 vs 1.
             </p>
             <button
               onClick={handleCreateRoom}
@@ -547,10 +547,10 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
         {/* Invite helper banner */}
         <div className="bg-amber-100 border border-amber-400 text-amber-900 px-2.5 py-1.5 rounded-lg text-xs mb-2 flex items-center justify-between">
           <span>
-            💡 Pasale el link a tu amigo o pedile que ingrese el código <b>{room.code}</b>.
+            💡 Compartile el enlace o código <b>{room.code}</b> a tu rival. ¡Con <b>2 jugadores</b> ya pueden competir!
           </span>
-          <span className="font-bold text-xs bg-amber-300 px-2 py-0.5 rounded-full">
-            {room.players.length}/4 Jugadores
+          <span className="font-bold text-xs bg-amber-300 px-2.5 py-1 rounded-full text-slate-800">
+            {room.players.length >= 2 ? `✓ ${room.players.length} Jugadores (¡Listos!)` : `${room.players.length}/2 Jugadores`}
           </span>
         </div>
 
@@ -613,8 +613,8 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
               <div className="text-2xl animate-spin mb-1" style={{ animationDuration: '3s' }}>
                 ⏳
               </div>
-              <span className="text-xs font-bold text-[#264653]">Esperando a tu amigo...</span>
-              <span className="text-[11px] text-gray-500">Compartí el código {room.code}</span>
+              <span className="text-xs font-bold text-[#264653]">Esperando a tu rival...</span>
+              <span className="text-[11px] text-gray-500">Compartí el código {room.code} · Con solo 2 jugadores ya compiten</span>
             </div>
           )}
         </div>
@@ -700,8 +700,8 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
               }`}
             >
               {room.players.length < 2
-                ? 'ESPERANDO QUE SE UNA UN AMIGO...'
-                : '¡INICIAR DUELO ENTRE AMIGOS!'}
+                ? 'ESPERANDO QUE SE UNA TU RIVAL (CON 2 YA COMPITEN)...'
+                : '¡INICIAR DUELO (2 JUGADORES LISTOS)!'}
             </button>
           ) : (
             <button

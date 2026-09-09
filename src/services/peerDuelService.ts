@@ -126,7 +126,7 @@ export class PeerDuelService {
         name: playerName,
         avatarKey,
         organism,
-        ready: false,
+        ready: true,
         usedAbility: false,
         isHost: true,
       });
@@ -356,8 +356,6 @@ export class PeerDuelService {
 
   public startRace() {
     if (!this.isHost || this.players.size < 2) return;
-    const allReady = Array.from(this.players.values()).every(p => p.ready);
-    if (!allReady) return;
 
     this.status = 'countdown';
     this.broadcast({ type: 'ROOM_UPDATE', room: this.getSanitizedRoom() });
