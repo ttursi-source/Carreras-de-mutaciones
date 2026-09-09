@@ -6,6 +6,7 @@ import { generateRandomClone } from '../utils/cloneGenerator';
 
 interface CloneCreatorProps {
   scientist: Scientist;
+  targetRoomCode?: string | null;
   onConfirmClone: (newClone: Organism) => void;
   onBack: () => void;
 }
@@ -17,6 +18,7 @@ const CLONE_NAMES = [
 
 export const CloneCreator: React.FC<CloneCreatorProps> = ({
   scientist,
+  targetRoomCode,
   onConfirmClone,
   onBack,
 }) => {
@@ -126,11 +128,19 @@ export const CloneCreator: React.FC<CloneCreatorProps> = ({
       </div>
 
       <div className="text-center mb-3">
+        {targetRoomCode && (
+          <div className="inline-flex items-center gap-1.5 bg-purple-700 text-yellow-300 font-mono font-bold text-xs px-3 py-1 rounded-full shadow mb-2 border border-purple-400">
+            <span>🎮</span>
+            <span>UNIRSE A SALA: #{targetRoomCode}</span>
+          </div>
+        )}
         <h1 className="pixel-text text-2xl sm:text-3xl font-bold text-[#e76f51] leading-none mb-1">
           CREÁ TU CLON
         </h1>
         <p className="text-xs text-[#264653] max-w-sm mx-auto">
-          Diseñá el clon con el que vas a correr en las <b>salas multijugador</b>.
+          {targetRoomCode
+            ? `Personalizá el clon con el que vas a correr en la sala #${targetRoomCode}.`
+            : 'Diseñá el clon con el que vas a correr en las salas multijugador.'}
         </p>
       </div>
 

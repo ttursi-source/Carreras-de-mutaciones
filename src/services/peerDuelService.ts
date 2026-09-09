@@ -9,12 +9,12 @@ export interface PeerDuelCallbacks {
 }
 
 const FINISH = 100;
-// Physics tuned so the race lasts at least 10 to 16 seconds
-const SPEED_K = 0.0050;
-const FATIGUE_K = 0.65;
-const RECOVERY_K = 0.022;
+// Physics tuned for intermediate difficulty (25 to 35 seconds)
+const SPEED_K = 0.0025;
+const FATIGUE_K = 0.30;
+const RECOVERY_K = 0.026;
 const TICK_MS = 80;
-const MAX_TICKS = 550;
+const MAX_TICKS = 850;
 
 export class PeerDuelService {
   private peer: Peer | null = null;
@@ -343,6 +343,11 @@ export class PeerDuelService {
       if (guest) {
         this.hostUseTurbo(guest.id);
       }
+    } else if (msg.type === 'GUITAR_HERO_HIT') {
+      const guest = Array.from(this.players.values()).find(p => !p.isHost);
+      if (guest) {
+        this.hostGuitarHeroHit(guest.id, msg.rating, msg.combo);
+      }
     } else if (msg.type === 'SEND_CHAT') {
       const guest = Array.from(this.players.values()).find(p => !p.isHost);
       const senderName = guest ? guest.name : 'Rival';
@@ -389,7 +394,27 @@ export class PeerDuelService {
   }
 
   public startRace() {
-    if (!this.isHost || this.players.size < 2) return;
+    if (!this.isHost) return;
+
+    if (this.players.size === 1) {
+      const botId = `bot_${Date.now()}`;
+      this.players.set(botId, {
+        id: botId,
+        name: 'Clon Desafío (IA)',
+        avatarKey: 'LabTwo',
+        organism: {
+          id: `bot_org_${Date.now()}`,
+          baseName: 'Cyber-Quimera',
+          speciesId: 7,
+          mods: [],
+          stats: { velocidad: 70, resistencia: 65, recuperacion: 65 },
+          ability: { id: 'turbo', name: 'Impulso Mitocondrial', desc: '+15% avance' },
+        },
+        ready: true,
+        usedAbility: false,
+        isHost: false,
+      });
+    }
 
     this.status = 'countdown';
     this.broadcast({ type: 'ROOM_UPDATE', room: this.getSanitizedRoom() });
@@ -462,7 +487,7 @@ export class PeerDuelService {
         if (r.finished) return;
 
         const { velocidad: vel, resistencia: res, recuperacion: rec } = r.org.stats;
-        const effort = r.fatigue >= 100 ? 0.25 : r.fatigue > 65 ? 0.65 : 1;
+        const effort = r.fatigue >= 100 ? 0.45 : r.fatigue > 65 ? 0.72 : 1;
         let speed = vel * SPEED_K * effort;
         if (this.activeEvent?.id === 'favorable') speed *= 1.5;
         r.progress += speed;
@@ -630,6 +655,38 @@ export class PeerDuelService {
     this.broadcast({
       type: 'TURBO_TRIGGERED',
       playerId,
+      roster: this.roster,
+    });
+  }
+
+  public guitarHeroHit(rating: string, combo: number) {
+    if (this.isHost) {
+      this.hostGuitarHeroHit(this.myPlayerId, rating, combo);
+    } else if (this.conn && this.conn.open) {
+      this.conn.send({ type: 'GUITAR_HERO_HIT', rating, combo });
+    }
+  }
+
+  private hostGuitarHeroHit(playerId: string, rating: string, combo: number) {
+    if (this.status !== 'racing') return;
+    const racer = this.roster.find(r => r.playerId === playerId);
+    if (!racer || racer.finished) return;
+
+    if (rating === 'PERFECT') {
+      racer.progress = Math.min(FINISH, racer.progress + 1.40);
+      racer.fatigue = Math.max(0, racer.fatigue - 1.5);
+    } else if (rating === 'GOOD') {
+      racer.progress = Math.min(FINISH, racer.progress + 0.85);
+      racer.fatigue = Math.max(0, racer.fatigue - 0.5);
+    } else if (rating === 'MISS') {
+      racer.fatigue = Math.min(100, racer.fatigue + 0.6);
+    }
+
+    this.broadcast({
+      type: 'GUITAR_HERO_SYNC',
+      playerId,
+      rating,
+      combo,
       roster: this.roster,
     });
   }

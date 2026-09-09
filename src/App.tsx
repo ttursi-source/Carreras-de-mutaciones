@@ -9,9 +9,20 @@ import { SoloRace } from './components/SoloRace';
 import { SoloPodium } from './components/SoloPodium';
 import { DuelManager } from './components/DuelManager';
 import { CloneCreator } from './components/CloneCreator';
+import { KahootJoin } from './components/KahootJoin';
 import { generateRandomClone } from './utils/cloneGenerator';
 
-type Screen = 'start' | 'scientist' | 'dilemma' | 'incubator' | 'facility' | 'solo_race' | 'solo_podium' | 'duel' | 'create_duel_clone';
+type Screen =
+  | 'start'
+  | 'kahoot_join'
+  | 'scientist'
+  | 'dilemma'
+  | 'incubator'
+  | 'facility'
+  | 'solo_race'
+  | 'solo_podium'
+  | 'duel'
+  | 'create_duel_clone';
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>('start');
@@ -38,8 +49,7 @@ export default function App() {
     } catch (e) {
       console.warn('Failed to load organisms from localStorage', e);
     }
-    // Generate an initial unique custom clone
-    return [generateRandomClone('Lab')];
+    return [];
   });
   const [selectedOrganism, setSelectedOrganism] = useState<Organism | null>(() => organisms[0] || null);
 
@@ -75,7 +85,7 @@ export default function App() {
 
   // Duel room code if user arrived via invite link
   const [duelInviteCode, setDuelInviteCode] = useState<string | null>(null);
-  const [returnScreenFromClone, setReturnScreenFromClone] = useState<Screen>('start');
+  const [returnScreenFromClone, setReturnScreenFromClone] = useState<Screen>('facility');
 
   // Detect query parameters (?duel=CODE or ?room=CODE)
   useEffect(() => {
@@ -84,8 +94,12 @@ export default function App() {
       const duelCode = params.get('duel') || params.get('room');
       if (duelCode) {
         setDuelInviteCode(duelCode.toUpperCase());
-        setReturnScreenFromClone('start');
-        setScreen('create_duel_clone');
+        // Must have created an organism in the lab to duel
+        if (organisms.length > 0) {
+          setScreen('duel');
+        } else {
+          setScreen('scientist');
+        }
       }
     } catch (e) {
       console.error('Error parsing query params', e);
@@ -98,6 +112,7 @@ export default function App() {
   };
 
   const handleStartNewGame = () => {
+    setScientistNameInput(scientist.name || '');
     setScreen('scientist');
   };
 
@@ -105,6 +120,7 @@ export default function App() {
     if (scientistNameInput.trim()) {
       setScientist(prev => ({ ...prev, name: scientistNameInput.trim() }));
     }
+    // Must first create organism in laboratory!
     setupDilemma();
     setScreen('dilemma');
   };
@@ -128,7 +144,12 @@ export default function App() {
     setSelectedOrganism(org);
     setEthicsLog(prev => [...prev, ethicsEntry]);
     setChosenBase(null);
-    setScreen('facility');
+    // If arriving with a duel invite, now that organism is created in lab, jump straight to duel!
+    if (duelInviteCode) {
+      setScreen('duel');
+    } else {
+      setScreen('facility');
+    }
   };
 
   const handleStartSoloRace = (org: Organism) => {
@@ -146,12 +167,17 @@ export default function App() {
   const handleStartDuelFromOrganism = (org: Organism) => {
     setSelectedOrganism(org);
     setReturnScreenFromClone('facility');
-    setScreen('create_duel_clone');
+    setScreen('duel');
   };
 
   const handleOpenDuelLobby = () => {
-    setReturnScreenFromClone(screen);
-    setScreen('create_duel_clone');
+    if (organisms.length === 0) {
+      setupDilemma();
+      setScreen('dilemma');
+      return;
+    }
+    setReturnScreenFromClone('facility');
+    setScreen('duel');
   };
 
   const handleConfirmDuelClone = (newClone: Organism) => {
@@ -195,28 +221,49 @@ export default function App() {
           </div>
 
           <p className="text-sm max-w-xs text-[#264653] opacity-90 leading-relaxed mb-4 px-2">
-            Diseñá organismos ficticios combinando genética, tomá decisiones bioéticas y hacelos competir en carreras automáticas y{' '}
-            <b className="text-[#e76f51]">duelos en tiempo real entre amigos</b>.
+            Diseñá tus propios organismos genéticos en el <b>Modo Laboratorio</b> con tecnología CRISPR y llevalos a competir en carreras y duelos contra tus amigos.
           </p>
 
           <div className="flex flex-col gap-2.5 w-full max-w-xs px-2">
             <button
               id="btn-start"
               onClick={handleStartNewGame}
-              className="btn btn-primary py-3 text-xl font-bold cursor-pointer shadow-md"
+              className="btn btn-primary py-3.5 text-xl font-bold cursor-pointer shadow-md w-full flex items-center justify-center gap-2"
             >
-              NUEVA PARTIDA
+              <span>🧪</span> NUEVA PARTIDA
             </button>
 
             <button
-              id="btn-duel-menu"
-              onClick={handleOpenDuelLobby}
-              className="btn btn-fight py-2.5 text-lg font-bold cursor-pointer shadow-md flex items-center justify-center gap-2"
+              id="btn-join-kahoot"
+              onClick={() => setScreen('kahoot_join')}
+              className="btn py-3 text-lg font-bold cursor-pointer shadow-md w-full flex items-center justify-center gap-2 bg-gradient-to-r from-purple-600 to-indigo-700 text-white hover:from-purple-500 hover:to-indigo-600 border-2 border-yellow-300"
             >
-              <span>⚔️</span> DUELOS ENTRE AMIGOS
+              <span>🎮</span> UNIRTE A PARTIDA (PIN)
             </button>
+
+            {organisms.length > 0 && (
+              <button
+                id="btn-continue-lab"
+                onClick={() => setScreen('facility')}
+                className="btn btn-action py-2 text-xs font-bold cursor-pointer shadow-sm text-gray-700 hover:text-black"
+              >
+                🔬 Continuar en Laboratorio ({organisms.length} espécimen{organisms.length > 1 ? 'es' : ''})
+              </button>
+            )}
           </div>
         </div>
+      )}
+
+      {/* ================= SCREEN: KAHOOT PIN JOIN ================= */}
+      {screen === 'kahoot_join' && (
+        <KahootJoin
+          onJoinCode={code => {
+            setDuelInviteCode(code);
+            setReturnScreenFromClone('kahoot_join');
+            setScreen('create_duel_clone');
+          }}
+          onBack={() => setScreen('start')}
+        />
       )}
 
       {/* ================= SCREEN: SCIENTIST ================= */}
@@ -260,12 +307,25 @@ export default function App() {
             </div>
           </div>
 
-          <button
-            onClick={handleConfirmScientist}
-            className="btn btn-primary w-full max-w-xs py-3 text-xl font-bold cursor-pointer"
-          >
-            EMPEZAR EXPERIMENTO
-          </button>
+          <div className="flex flex-col gap-2 w-full max-w-xs">
+            <button
+              id="btn-confirm-scientist"
+              onClick={handleConfirmScientist}
+              className="btn btn-primary py-3.5 text-lg font-bold cursor-pointer shadow-md flex items-center justify-center gap-2"
+            >
+              <span>🧬</span> CREAR ORGANISMO EN LABORATORIO
+            </button>
+            <p className="text-[11px] text-[#264653]/80 text-center leading-tight">
+              Primero debés crear tu espécimen en el modo laboratorio para luego poder desafiar a tus amigos.
+            </p>
+
+            <button
+              onClick={() => setScreen('start')}
+              className="text-xs text-[#264653] underline font-bold mt-1 text-center cursor-pointer"
+            >
+              ← Volver al Inicio
+            </button>
+          </div>
         </div>
       )}
 
@@ -372,8 +432,9 @@ export default function App() {
       {screen === 'create_duel_clone' && (
         <CloneCreator
           scientist={scientist}
+          targetRoomCode={duelInviteCode}
           onConfirmClone={handleConfirmDuelClone}
-          onBack={() => setScreen(returnScreenFromClone || 'start')}
+          onBack={() => setScreen(returnScreenFromClone || 'facility')}
         />
       )}
 
@@ -381,7 +442,11 @@ export default function App() {
       {screen === 'duel' && (
         <DuelManager
           scientist={scientist}
-          organisms={organisms}
+          organisms={
+            selectedOrganism
+              ? [selectedOrganism, ...organisms.filter(o => o.id !== selectedOrganism.id)]
+              : organisms
+          }
           initialDuelCode={duelInviteCode}
           onExit={() => setScreen('facility')}
           onAddNewOrganism={handleAddNewOrganism}

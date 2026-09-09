@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Organism, Scientist } from '../types';
 import { CreatureSprite } from './CreatureSprite';
 import { generateRandomClone } from '../utils/cloneGenerator';
+import { GuitarHeroTrack, GuitarHeroHitEvent } from './GuitarHeroTrack';
 
 interface SoloRaceProps {
   playerOrganism: Organism;
@@ -20,12 +21,12 @@ interface LocalRacer {
   isPlayer: boolean;
 }
 
-// Physics scaled so that even at max speed it takes >= 10 seconds to finish
-const SPEED_K = 0.0052;
-const FATIGUE_K = 0.70;
-const RECOVERY_K = 0.024;
+// Physics scaled for intermediate difficulty (25 to 35 seconds with rhythmic boosts)
+const SPEED_K = 0.0025;
+const FATIGUE_K = 0.30;
+const RECOVERY_K = 0.026;
 const TICK_MS = 100;
-const MAX_TICKS = 600;
+const MAX_TICKS = 900;
 const FINISH = 100;
 
 export const SoloRace: React.FC<SoloRaceProps> = ({
@@ -40,6 +41,7 @@ export const SoloRace: React.FC<SoloRaceProps> = ({
   const [raceActive, setRaceActive] = useState(true);
   const [tickCount, setTickCount] = useState(0);
   const [isTurboActive, setIsTurboActive] = useState(false);
+  const [guitarHeroCombo, setGuitarHeroCombo] = useState(0);
 
   const rosterRef = useRef<LocalRacer[]>([]);
   rosterRef.current = roster;
@@ -102,6 +104,38 @@ export const SoloRace: React.FC<SoloRaceProps> = ({
   }, [playerOrganism, scientist]);
 
   // Turbo handler: triggered by pressing any key or clicking the turbo button
+  const handleGuitarHeroHit = (event: GuitarHeroHitEvent) => {
+    if (!raceActiveRef.current) return;
+    if (event.rating === 'PERFECT') {
+      setIsTurboActive(true);
+      setTimeout(() => setIsTurboActive(false), 200);
+    }
+    setRoster(prev =>
+      prev.map(r => {
+        if (!r.isPlayer || r.progress >= FINISH) return r;
+        if (event.rating === 'PERFECT') {
+          return {
+            ...r,
+            progress: Math.min(FINISH, r.progress + 1.40),
+            fatigue: Math.max(0, r.fatigue - 1.5),
+          };
+        } else if (event.rating === 'GOOD') {
+          return {
+            ...r,
+            progress: Math.min(FINISH, r.progress + 0.85),
+            fatigue: Math.max(0, r.fatigue - 0.5),
+          };
+        } else if (event.rating === 'MISS') {
+          return {
+            ...r,
+            fatigue: Math.min(100, r.fatigue + 0.6),
+          };
+        }
+        return r;
+      })
+    );
+  };
+
   const handleTurbo = () => {
     if (!raceActiveRef.current) return;
     const now = Date.now();
@@ -243,7 +277,7 @@ export const SoloRace: React.FC<SoloRaceProps> = ({
         if (r.progress >= FINISH) return r;
 
         const { velocidad: vel, resistencia: res, recuperacion: rec } = r.org.stats;
-        const effort = r.fatigue >= 100 ? 0.25 : r.fatigue > 65 ? 0.65 : 1;
+        const effort = r.fatigue >= 100 ? 0.45 : r.fatigue > 65 ? 0.72 : 1;
         let speed = vel * SPEED_K * effort;
         if (activeEventRef.current?.id === 'favorable') speed *= 1.4;
 
@@ -411,9 +445,15 @@ export const SoloRace: React.FC<SoloRaceProps> = ({
         })}
       </div>
 
-      <p className="text-[11px] text-center text-[#264653] font-medium mt-1">
-        ⌨️ <b>Presioná cualquier tecla</b> o el botón <b>🚀 TURBO</b> para un impulso extra (cuesta fatiga) · <b>[ESPACIO]</b> activa tu poder genético.
-      </p>
+      {/* Guitar Hero Rhythm Highway & Hit Controls */}
+      <div className="mt-1.5 shadow-lg">
+        <GuitarHeroTrack
+          active={raceActive}
+          onHit={handleGuitarHeroHit}
+          combo={guitarHeroCombo}
+          onComboChange={setGuitarHeroCombo}
+        />
+      </div>
     </div>
   );
 };

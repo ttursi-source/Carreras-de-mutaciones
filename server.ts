@@ -91,6 +91,38 @@ interface DuelRoom {
 
 const rooms = new Map<string, DuelRoom>();
 
+// Standard numbered rooms: Sala 1, Sala 2, Sala 3, etc. - all identical
+function initDefaultRooms() {
+  for (let i = 1; i <= 8; i++) {
+    const code = String(i);
+    if (!rooms.has(code)) {
+      rooms.set(code, {
+        code,
+        isPublic: true,
+        players: new Map(),
+        status: 'lobby',
+        countdownTimer: null,
+        raceInterval: null,
+        eventInterval: null,
+        activeEvent: null,
+        tickCount: 0,
+        startTime: 0,
+        roster: [],
+        results: [],
+        chatMessages: [
+          {
+            sender: 'SISTEMA',
+            text: `¡Bienvenidos a la Sala ${i}! Pista reglamentaria igualada para todos los clones.`,
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          },
+        ],
+        rematchVotes: new Set(),
+      });
+    }
+  }
+}
+initDefaultRooms();
+
 function generateRoomCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code = '';
@@ -142,12 +174,12 @@ function getSanitizedRoom(room: DuelRoom) {
   };
 }
 
-// Tuned so race lasts at least 10 to 16 seconds
-const SPEED_K = 0.0052;
-const FATIGUE_K = 0.70;
-const RECOVERY_K = 0.024;
+// Tuned so race lasts around 25 to 35 seconds and notes give rhythm boosts (intermediate difficulty)
+const SPEED_K = 0.0025;
+const FATIGUE_K = 0.30;
+const RECOVERY_K = 0.026;
 const TICK_MS = 100;
-const MAX_TICKS = 600;
+const MAX_TICKS = 900;
 const FINISH = 100;
 
 function startDuelRace(room: DuelRoom) {
@@ -209,7 +241,7 @@ function startDuelRace(room: DuelRoom) {
       if (r.finished) return;
 
       const { velocidad: vel, resistencia: res, recuperacion: rec } = r.org.stats;
-      const effort = r.fatigue >= 100 ? 0.25 : r.fatigue > 65 ? 0.65 : 1;
+      const effort = r.fatigue >= 100 ? 0.45 : r.fatigue > 65 ? 0.72 : 1;
       let speed = vel * SPEED_K * effort;
       if (room.activeEvent?.id === 'favorable') speed *= 1.5;
       r.progress += speed;
@@ -417,16 +449,26 @@ wss.on('connection', (ws: WebSocket) => {
           })
         );
       } else if (data.type === 'JOIN_ROOM') {
-        const code = (data.roomCode || '').toUpperCase().trim();
+        let code = (data.roomCode || '').toUpperCase().trim();
+        // Strip "SALA " prefix so "SALA 1" or "1" target the exact same room
+        code = code.replace(/^SALA\s*/i, '');
         let room = rooms.get(code);
 
+        // If room exists but is empty, reset to lobby
+        if (room && room.players.size === 0) {
+          room.status = 'lobby';
+          room.roster = [];
+          room.results = [];
+          room.rematchVotes.clear();
+        }
+
         if (!room) {
-          if (data.autoCreateIfMissing || code.startsWith('PUB') || /^\d+$/.test(code) || code.startsWith('SALA')) {
+          if (data.autoCreateIfMissing || code.startsWith('PUB') || /^\d+$/.test(code) || code.startsWith('SALA') || true) {
             currentRoomCode = code;
             currentUserId = data.playerId || `p_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
             const player: DuelPlayer = {
               id: currentUserId,
-              name: data.playerName || 'Científico',
+              name: data.playerName || 'Científico/a',
               avatarKey: data.avatarKey || 'LabOne',
               organism: data.organism,
               ready: true,
@@ -451,7 +493,7 @@ wss.on('connection', (ws: WebSocket) => {
               chatMessages: [
                 {
                   sender: 'SISTEMA',
-                  text: `Lobby público ${code} abierto. ¡Esperando rivales!`,
+                  text: `Sala ${code} lista. ¡Esperando rivales!`,
                   time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                 },
               ],
@@ -468,17 +510,10 @@ wss.on('connection', (ws: WebSocket) => {
               })
             );
             return;
-          } else {
-            ws.send(JSON.stringify({ type: 'ERROR', message: `No se encontró la sala con código "${code}".` }));
-            return;
           }
         }
 
-        if (room.players.size >= 4) {
-          ws.send(JSON.stringify({ type: 'ERROR', message: `La sala ${code} ya está llena (máx 4 jugadores).` }));
-          return;
-        }
-
+        // No player limit - rooms support unlimited racers!
         if (room.status === 'racing' || room.status === 'countdown') {
           ws.send(JSON.stringify({ type: 'ERROR', message: `La carrera en la sala ${code} ya está en curso.` }));
           return;
@@ -553,14 +588,27 @@ wss.on('connection', (ws: WebSocket) => {
           return;
         }
 
-        if (room.players.size < 2) {
-          ws.send(
-            JSON.stringify({
-              type: 'ERROR',
-              message: 'Se necesitan al menos 2 amigos en la sala para competir.',
-            })
-          );
-          return;
+        // If only 1 player, add a sparring rival clone so there is competition
+        if (room.players.size === 1) {
+          const botId = `bot_${Date.now()}`;
+          const botPlayer: DuelPlayer = {
+            id: botId,
+            name: 'Clon Desafío (IA)',
+            avatarKey: 'LabTwo',
+            organism: {
+              id: `bot_org_${Date.now()}`,
+              baseName: 'Cyber-Quimera',
+              speciesId: 7,
+              mods: [{ id: 1, name: 'Fibra Rápida' }],
+              stats: { velocidad: 70, resistencia: 65, recuperacion: 65 },
+              ability: { id: 'turbo', name: 'Impulso Mitocondrial', desc: '+15% avance' },
+            },
+            ready: true,
+            usedAbility: false,
+            ws: { readyState: 0 } as any,
+            isHost: false,
+          };
+          room.players.set(botId, botPlayer);
         }
 
         // Start countdown
@@ -580,6 +628,34 @@ wss.on('connection', (ws: WebSocket) => {
             startDuelRace(room);
           }
         }, 1000);
+      } else if (data.type === 'GUITAR_HERO_HIT') {
+        if (!currentRoomCode || !currentUserId) return;
+        const room = rooms.get(currentRoomCode);
+        if (!room || room.status !== 'racing') return;
+        const racer = room.roster.find(r => r.playerId === currentUserId);
+        if (!racer || racer.finished) return;
+
+        const rating = data.rating; // 'PERFECT' | 'GOOD' | 'MISS'
+        if (rating === 'PERFECT') {
+          // Significant rhythmic turbo boost!
+          racer.progress = Math.min(FINISH, racer.progress + 1.40);
+          // Reward with fatigue relief
+          racer.fatigue = Math.max(0, racer.fatigue - 1.5);
+        } else if (rating === 'GOOD') {
+          racer.progress = Math.min(FINISH, racer.progress + 0.85);
+          racer.fatigue = Math.max(0, racer.fatigue - 0.5);
+        } else if (rating === 'MISS') {
+          // Gentle intermediate penalty on strike / miss
+          racer.fatigue = Math.min(100, racer.fatigue + 0.6);
+        }
+
+        broadcastToRoom(room, {
+          type: 'GUITAR_HERO_SYNC',
+          playerId: currentUserId,
+          rating,
+          combo: data.combo,
+          roster: room.roster,
+        });
       } else if (data.type === 'USE_ABILITY') {
         if (!currentRoomCode || !currentUserId) return;
         const room = rooms.get(currentRoomCode);
@@ -602,7 +678,7 @@ wss.on('connection', (ws: WebSocket) => {
         player.lastTurbo = now;
 
         racer.progress = Math.min(FINISH, racer.progress + 1.0);
-        racer.fatigue = Math.min(100, racer.fatigue + 2.2);
+        racer.fatigue = Math.min(100, racer.fatigue + 2.0);
         racer.overheated = racer.fatigue >= 100;
 
         broadcastToRoom(room, {
@@ -613,20 +689,18 @@ wss.on('connection', (ws: WebSocket) => {
       } else if (data.type === 'GET_PUBLIC_ROOMS') {
         const publicRooms: any[] = [];
         rooms.forEach((r, code) => {
-          if (r.isPublic && r.status === 'lobby' && r.players.size < 4) {
+          if (r.isPublic && (r.status === 'lobby' || r.players.size === 0)) {
             const host = Array.from(r.players.values()).find(p => p.isHost) || Array.from(r.players.values())[0];
-            if (host) {
-              publicRooms.push({
-                code,
-                hostName: host.name,
-                hostAvatarKey: host.avatarKey,
-                hostOrganismName: host.organism.baseName,
-                hostSpeciesId: host.organism.speciesId,
-                playerCount: r.players.size,
-                maxPlayers: 4,
-                status: r.status,
-              });
-            }
+            publicRooms.push({
+              code,
+              hostName: host ? host.name : 'Disponible',
+              hostAvatarKey: host ? host.avatarKey : 'LabOne',
+              hostOrganismName: host ? host.organism.baseName : 'Vacante',
+              hostSpeciesId: host ? host.organism.speciesId : 1,
+              playerCount: r.players.size,
+              maxPlayers: 'Sin límite',
+              status: r.status,
+            });
           }
         });
         ws.send(JSON.stringify({ type: 'PUBLIC_ROOMS_LIST', rooms: publicRooms }));

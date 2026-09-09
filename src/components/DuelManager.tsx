@@ -5,6 +5,7 @@ import { BASE_ORGANISMS, ABILITIES } from '../data/gameData';
 import { CreatureSprite } from './CreatureSprite';
 import { PeerDuelService } from '../services/peerDuelService';
 import { generateRandomClone } from '../utils/cloneGenerator';
+import { GuitarHeroTrack, GuitarHeroHitEvent } from './GuitarHeroTrack';
 
 interface DuelManagerProps {
   scientist: Scientist;
@@ -52,6 +53,7 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
   const [chatInput, setChatInput] = useState('');
   const [abilityBanner, setAbilityBanner] = useState<string | null>(null);
   const [countdownDisplay, setCountdownDisplay] = useState<string | number | null>(null);
+  const [guitarHeroCombo, setGuitarHeroCombo] = useState<number>(0);
 
   const podiumRef = useRef<HTMLDivElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -93,6 +95,7 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
     } else if (msg.type === 'RACE_STARTED') {
       setRoom(msg.room);
       setCountdownDisplay(null);
+      setGuitarHeroCombo(0);
     } else if (msg.type === 'RACE_TICK') {
       setRoom(prev => (prev ? { ...prev, roster: msg.roster, activeEvent: msg.activeEvent } : prev));
     } else if (msg.type === 'RACE_EVENT') {
@@ -101,6 +104,14 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
       setAbilityBanner(msg.message);
       setTimeout(() => setAbilityBanner(null), 3000);
       setRoom(prev => (prev ? { ...prev, roster: msg.roster } : prev));
+    } else if (msg.type === 'GUITAR_HERO_SYNC') {
+      if (msg.roster) {
+        setRoom(prev => (prev ? { ...prev, roster: msg.roster } : prev));
+      }
+      if (msg.playerId === myPlayerId && msg.rating === 'PERFECT') {
+        setTurboFlash(true);
+        setTimeout(() => setTurboFlash(false), 200);
+      }
     } else if (msg.type === 'TURBO_TRIGGERED') {
       if (msg.roster) {
         setRoom(prev => (prev ? { ...prev, roster: msg.roster } : prev));
@@ -439,10 +450,22 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
     }
   };
 
+  const handleGuitarHeroHit = (event: GuitarHeroHitEvent) => {
+    if (transport === 'ws' && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'GUITAR_HERO_HIT', rating: event.rating, combo: event.combo }));
+    } else if (transport === 'p2p') {
+      p2pRef.current?.guitarHeroHit(event.rating, event.combo);
+    }
+    if (event.rating === 'PERFECT') {
+      setTurboFlash(true);
+      setTimeout(() => setTurboFlash(false), 200);
+    }
+  };
+
   const me = room?.players.find(p => p.id === myPlayerId);
   const isHost = !!me?.isHost;
   const allReady = room?.players.every(p => p.ready || p.isHost);
-  const canStart = isHost && (room?.players.length || 0) >= 2;
+  const canStart = isHost && (room?.players.length || 0) >= 1;
 
   // ================= VIEW 1: NO ROOM JOINED YET (Lobby Browser) =================
   if (!room) {
@@ -799,14 +822,15 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
         {/* Lobby Header */}
         <div className="flex justify-between items-center bg-[#264653] text-white px-3 py-2 rounded-xl border-b-4 border-[#2a9d8f] shadow mb-2">
           <div>
-            <span className="text-xs text-teal-200">SALA DE DUELO</span>
-            <div className="text-2xl font-mono font-bold text-yellow-400 tracking-wider flex items-center gap-2">
-              {room.code}
+            <span className="text-xs text-teal-200">PISTA DE COMPETENCIA</span>
+            <div className="text-2xl font-mono font-black text-yellow-400 tracking-wider flex items-center gap-2">
+              {/^\d+$/.test(room.code) ? `SALA ${room.code}` : room.code}
               <button
                 onClick={handleCopyCode}
-                className="text-xs bg-white/20 hover:bg-white/30 text-white px-2 py-0.5 rounded cursor-pointer font-sans"
+                className="text-xs bg-white/20 hover:bg-white/30 text-white px-2 py-0.5 rounded cursor-pointer font-sans font-normal"
+                title="Copiar código para compartir"
               >
-                {copiedCode ? '¡Copiado!' : 'Copiar'}
+                {copiedCode ? '¡Copiado!' : 'Copiar PIN'}
               </button>
             </div>
           </div>
@@ -828,39 +852,39 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
         </div>
 
         {/* Invite helper banner */}
-        <div className="bg-amber-100 border border-amber-400 text-amber-900 px-2.5 py-1.5 rounded-lg text-xs mb-2 flex items-center justify-between">
+        <div className="bg-amber-100 border border-amber-400 text-amber-900 px-3 py-1.5 rounded-lg text-xs mb-2 flex items-center justify-between flex-wrap gap-2">
           <span>
-            💡 Compartile el enlace o código <b>{room.code}</b> a tu rival. ¡Con <b>2 jugadores</b> ya pueden competir!
+            💡 PIN de sala: <b>{room.code}</b>. <b>¡No hay límite de jugadores!</b> Todos los que tengan el código pueden sumarse.
           </span>
-          <span className="font-bold text-xs bg-amber-300 px-2.5 py-1 rounded-full text-slate-800">
-            {room.players.length >= 2 ? `✓ ${room.players.length} Jugadores (¡Listos!)` : `${room.players.length}/2 Jugadores`}
+          <span className="font-bold text-xs bg-emerald-600 text-white px-2.5 py-1 rounded-full shadow-sm">
+            👥 {room.players.length} Corredor{room.players.length > 1 ? 'es' : ''} (Sin límite)
           </span>
         </div>
 
-        {/* Players List Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
+        {/* Players List Grid - Responsive & Scrollable for Unlimited Racers */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 mb-2 max-h-[300px] overflow-y-auto pr-1">
           {room.players.map(p => {
             const isMe = p.id === myPlayerId;
             return (
               <div
                 key={p.id}
-                className={`p-2.5 rounded-xl border-2 shadow-sm relative ${
+                className={`p-2.5 rounded-xl border-2 shadow-sm relative transition-all ${
                   isMe
-                    ? 'bg-yellow-50 border-yellow-500'
-                    : 'bg-white border-[#264653]/40'
+                    ? 'bg-yellow-50 border-yellow-500 ring-2 ring-yellow-400/30'
+                    : 'bg-white border-[#264653]/40 hover:border-[#264653]'
                 }`}
               >
                 <div className="flex justify-between items-center mb-1">
-                  <span className="font-bold text-sm text-[#264653] flex items-center gap-1">
+                  <span className="font-bold text-sm text-[#264653] flex items-center gap-1 truncate max-w-[130px]">
                     {p.name} {isMe && '(Vos)'}
                     {p.isHost && (
                       <span className="text-[10px] bg-amber-500 text-black px-1.5 py-0.2 rounded font-bold">
-                        ANFITRIÓN
+                        HOST
                       </span>
                     )}
                   </span>
                   <span
-                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap ${
                       p.ready
                         ? 'bg-emerald-500 text-white'
                         : p.isHost
@@ -868,20 +892,19 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
                           : 'bg-gray-300 text-gray-700'
                     }`}
                   >
-                    {p.ready ? '✓ LISTO' : p.isHost ? 'ORGANIZANDO' : 'PENDIENTE'}
+                    {p.ready ? '✓ LISTO' : p.isHost ? 'HOST' : 'ESPERA'}
                   </span>
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <CreatureSprite speciesId={p.organism.speciesId} mods={p.organism.mods} sizePx={56} />
-                  <div className="flex-1 text-xs">
-                    <div className="font-bold text-[#264653]">{p.organism.baseName}</div>
-                    <div className="text-gray-600 font-mono text-[11px]">
+                  <CreatureSprite speciesId={p.organism.speciesId} mods={p.organism.mods} sizePx={48} />
+                  <div className="flex-1 text-xs min-w-0">
+                    <div className="font-bold text-[#264653] truncate">{p.organism.baseName}</div>
+                    <div className="text-gray-600 font-mono text-[10px]">
                       Vel {Math.round(p.organism.stats.velocidad)} · Res{' '}
-                      {Math.round(p.organism.stats.resistencia)} · Rec{' '}
-                      {Math.round(p.organism.stats.recuperacion)}
+                      {Math.round(p.organism.stats.resistencia)}
                     </div>
-                    <div className="text-purple-700 font-bold text-[11px] truncate">
+                    <div className="text-purple-700 font-bold text-[10px] truncate">
                       ⚡ {p.organism.ability.name}
                     </div>
                   </div>
@@ -890,16 +913,12 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
             );
           })}
 
-          {/* Empty slot placeholder */}
-          {room.players.length === 1 && (
-            <div className="p-4 rounded-xl border-2 border-dashed border-[#264653]/40 flex flex-col items-center justify-center text-center text-gray-500 bg-white/40">
-              <div className="text-2xl animate-spin mb-1" style={{ animationDuration: '3s' }}>
-                ⏳
-              </div>
-              <span className="text-xs font-bold text-[#264653]">Esperando a tu rival...</span>
-              <span className="text-[11px] text-gray-500">Compartí el código {room.code} · Con solo 2 jugadores ya compiten</span>
-            </div>
-          )}
+          {/* Slot for waiting or inviting more friends */}
+          <div className="p-3 rounded-xl border-2 border-dashed border-[#264653]/40 flex flex-col items-center justify-center text-center text-gray-500 bg-white/40 hover:bg-white/60 transition">
+            <span className="text-lg">➕</span>
+            <span className="text-xs font-bold text-[#264653]">¡Entran todos!</span>
+            <span className="text-[10px] text-gray-500">Compartí el PIN <b>{room.code}</b></span>
+          </div>
         </div>
 
         {/* Change my organism or clone a new one inside lobby */}
@@ -998,22 +1017,20 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
             <button
               onClick={handleStartRace}
               disabled={!canStart}
-              className={`btn btn-primary w-full py-3 text-xl font-bold cursor-pointer shadow-lg ${
-                !canStart ? 'opacity-40 cursor-not-allowed' : 'animate-pulse'
-              }`}
+              className="btn btn-primary w-full py-3.5 text-lg sm:text-xl font-black cursor-pointer shadow-xl animate-pulse bg-gradient-to-r from-emerald-500 via-teal-600 to-emerald-600 text-white border-2 border-yellow-300"
             >
               {room.players.length < 2
-                ? 'ESPERANDO QUE SE UNA TU RIVAL (CON 2 YA COMPITEN)...'
-                : '¡INICIAR DUELO (2 JUGADORES LISTOS)!'}
+                ? '🚀 ¡INICIAR CARRERA AHORA! (O esperar a tus amigos)'
+                : `🏁 ¡INICIAR CARRERA YA! (${room.players.length} jugadores listos)`}
             </button>
           ) : (
             <button
               onClick={handleToggleReady}
-              className={`btn w-full py-3 text-xl font-bold cursor-pointer shadow-lg ${
-                me?.ready ? 'btn-action bg-emerald-600 border-emerald-300' : 'btn-primary'
+              className={`btn w-full py-3 text-lg font-bold cursor-pointer shadow-lg ${
+                me?.ready ? 'btn-action bg-emerald-600 border-emerald-300 text-white' : 'btn-primary'
               }`}
             >
-              {me?.ready ? '✓ ¡ESTÁS LISTO! (Esperando al anfitrión)' : 'MARCAR COMO LISTO'}
+              {me?.ready ? '✓ ¡ESTÁS LISTO! (Esperando a que el anfitrión inicie...)' : 'MARCAR COMO LISTO'}
             </button>
           )}
         </div>
@@ -1023,11 +1040,11 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
 
   // ================= VIEW 3: MULTIPLAYER RACE =================
   if (room.status === 'racing') {
+    const totalRacers = room.roster.length;
+    const sortedRoster = [...room.roster].sort((a, b) => b.progress - a.progress);
     const meRacer = room.roster.find(r => r.playerId === myPlayerId);
-    const leader = room.roster.reduce(
-      (prev, curr) => (curr.progress > prev.progress ? curr : prev),
-      room.roster[0] || { name: '-', progress: 0 }
-    );
+    const myRank = sortedRoster.findIndex(r => r.playerId === myPlayerId) + 1;
+    const leader = sortedRoster[0] || { name: '-', progress: 0 };
 
     return (
       <div className="flex-1 flex flex-col w-full h-full bg-gradient-to-b from-[#74b9ff] via-[#74b9ff]/60 to-[#55efc4] relative overflow-hidden select-none p-2">
@@ -1046,28 +1063,48 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
         )}
 
         {/* Race HUD */}
-        <div className="bg-[#2d3436]/95 text-white px-3 py-2 rounded-xl mb-2 border-b-4 border-[#2a9d8f] shadow">
-          <div className="flex justify-between items-center text-xs mb-1">
-            <span className="font-bold text-amber-300 font-mono">SALA: {room.code}</span>
-            <span className="font-bold text-[#81ecec] tracking-wider">⚔️ DUELO EN VIVO</span>
-            <span className="text-xs bg-emerald-500/80 px-2 py-0.5 rounded-full">Sincronizado</span>
+        <div className="bg-[#2d3436]/95 text-white px-3 py-2 rounded-xl mb-1.5 border-b-4 border-[#2a9d8f] shadow">
+          <div className="flex justify-between items-center text-xs mb-1 flex-wrap gap-1">
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-amber-300 font-mono">
+                {/^\d+$/.test(room.code) ? `SALA ${room.code}` : `SALA: ${room.code}`}
+              </span>
+              <span className="text-[10px] bg-teal-800 text-teal-200 px-2 py-0.5 rounded-full font-semibold">
+                👥 {totalRacers} corredores
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              {/* My live rank pill */}
+              <div className="flex items-center gap-1 bg-yellow-400 text-slate-900 px-2.5 py-0.5 rounded-full font-black text-xs shadow">
+                <span>{myRank === 1 ? '🥇' : myRank === 2 ? '🥈' : myRank === 3 ? '🥉' : '🏃'}</span>
+                <span>PUESTO #{myRank} de {totalRacers}</span>
+              </div>
+              <span className="text-[11px] bg-emerald-500/80 text-white px-2 py-0.5 rounded-full font-bold">
+                EN VIVO
+              </span>
+            </div>
           </div>
 
-          <div className="flex items-center justify-between gap-2 mt-1">
+          <div className="flex items-center justify-between gap-2 mt-1 flex-wrap">
             {/* My Fatigue Meter */}
-            <div className="flex items-center gap-1.5 flex-1">
-              <span className="text-xs font-bold text-red-300">TU FATIGA:</span>
-              <div className="flex-1 max-w-[100px] h-3 bg-gray-800 border border-gray-400 rounded-full overflow-hidden">
+            <div className="flex items-center gap-1.5 flex-1 min-w-[130px]">
+              <span className="text-[11px] font-bold text-red-300">TU FATIGA:</span>
+              <div className="flex-1 max-w-[120px] h-3 bg-gray-800 border border-gray-400 rounded-full overflow-hidden relative">
                 <div
-                  className="h-full bg-gradient-to-r from-yellow-500 to-red-500 transition-all duration-150"
+                  className="h-full bg-gradient-to-r from-yellow-500 via-orange-500 to-red-600 transition-all duration-150"
                   style={{ width: `${meRacer ? Math.min(100, meRacer.fatigue) : 0}%` }}
                 />
               </div>
+              <span className="text-[10px] font-mono text-gray-300">
+                {meRacer ? Math.round(meRacer.fatigue) : 0}%
+              </span>
             </div>
 
             {/* Leader badge */}
-            <div className="bg-amber-400 text-slate-900 px-3 py-0.5 rounded-full text-xs font-bold truncate max-w-[140px] border border-white shadow">
-              Líder: {leader.name}
+            <div className="bg-amber-300 text-slate-900 px-2.5 py-0.5 rounded-full text-xs font-bold truncate max-w-[160px] border border-white shadow flex items-center gap-1">
+              <span>👑 1º:</span>
+              <span className="truncate">{leader.name}</span>
+              <span className="font-mono text-[10px] text-gray-700">({Math.round(leader.progress)}%)</span>
             </div>
 
             {/* Actions: Turbo + Ability */}
@@ -1076,7 +1113,7 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
               <button
                 onClick={handleUseTurbo}
                 disabled={meRacer ? meRacer.fatigue >= 100 || meRacer.finished : true}
-                className={`btn text-xs font-bold px-2.5 py-1.5 text-white border rounded cursor-pointer transition ${
+                className={`btn text-xs font-bold px-2.5 py-1 text-white border rounded cursor-pointer transition ${
                   meRacer && (meRacer.fatigue >= 100 || meRacer.finished)
                     ? 'bg-gray-600 opacity-50 cursor-not-allowed border-gray-400'
                     : turboFlash
@@ -1092,7 +1129,7 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
               <button
                 onClick={handleUseAbility}
                 disabled={me?.usedAbility || (meRacer ? meRacer.fatigue >= 100 : true)}
-                className={`btn text-xs font-bold px-2.5 py-1.5 text-white border rounded cursor-pointer ${
+                className={`btn text-xs font-bold px-2.5 py-1 text-white border rounded cursor-pointer ${
                   me?.usedAbility || (meRacer && meRacer.fatigue >= 100)
                     ? 'bg-gray-600 opacity-50 cursor-not-allowed border-gray-400'
                     : 'bg-blue-600 hover:bg-blue-500 border-blue-300 shadow active:translate-y-0.5'
@@ -1106,72 +1143,217 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
           </div>
         </div>
 
-        {/* Track Container */}
-        <div className="flex-1 bg-[#d35400] border-t-8 border-b-8 border-[#2a9d8f] relative rounded shadow-inner flex flex-col justify-around py-1">
-          {/* Finish Line */}
+        {/* Global Panoramic Track (Minimap for ALL racers) */}
+        <div className="bg-[#2d3436] rounded-lg p-1.5 mb-1.5 border border-[#2a9d8f]/60 shadow">
+          <div className="flex justify-between items-center text-[10px] text-teal-300 font-bold mb-0.5 px-1">
+            <span>🚩 SALIDA (0%)</span>
+            <span className="text-yellow-300 font-mono">PISTA PANORÁMICA ({totalRacers} CORREDORES)</span>
+            <span>🏁 META (100%)</span>
+          </div>
+
           <div
-            className="absolute right-[8%] top-0 bottom-0 w-6 border-l-2 border-r-2 border-white z-10 opacity-90"
+            className="h-9 relative rounded overflow-hidden border border-white/30"
+            style={{
+              backgroundColor: '#c0392b',
+              backgroundImage: 'repeating-linear-gradient(90deg, transparent, transparent 24%, rgba(255,255,255,0.15) 24%, rgba(255,255,255,0.15) 25%)',
+            }}
+          >
+            {/* Finish Line on Minimap */}
+            <div
+              className="absolute right-0 top-0 bottom-0 w-4 border-l border-white z-10"
+              style={{
+                backgroundImage: 'repeating-conic-gradient(#000 0% 25%, #fff 0% 50%)',
+                backgroundSize: '8px 8px',
+              }}
+            />
+
+            {/* All racers pins */}
+            {sortedRoster.map((racer, idx) => {
+              const isMe = racer.playerId === myPlayerId;
+              const leftPercent = Math.min(92, (racer.progress / 100) * 92);
+              const rank = idx + 1;
+
+              return (
+                <div
+                  key={racer.playerId}
+                  className={`absolute top-0.5 transition-all duration-150 flex flex-col items-center ${
+                    isMe ? 'z-30' : 'z-20'
+                  }`}
+                  style={{ left: `${leftPercent}%` }}
+                >
+                  {/* Runner Marker */}
+                  <div
+                    className={`rounded-full flex items-center justify-center shadow-md transition-transform ${
+                      isMe
+                        ? 'w-6 h-6 ring-2 ring-yellow-400 bg-yellow-300 scale-110'
+                        : 'w-5 h-5 bg-white/90 border border-black/40'
+                    }`}
+                    title={`${racer.name} (#${rank})`}
+                  >
+                    <CreatureSprite speciesId={racer.org.speciesId} mods={racer.org.mods} sizePx={isMe ? 22 : 18} />
+                  </div>
+                  {isMe && (
+                    <span className="text-[9px] font-black bg-yellow-400 text-slate-900 px-1 rounded-sm shadow -mt-0.5 whitespace-nowrap">
+                      TÚ #{myRank}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Detailed Action Lanes Container */}
+        <div className="flex-1 bg-[#d35400] border-t-4 border-b-4 border-[#2a9d8f] relative rounded-xl shadow-inner flex flex-col overflow-hidden min-h-[140px]">
+          {/* Finish Line on main tracks */}
+          <div
+            className="absolute right-[8%] top-0 bottom-0 w-6 border-l-2 border-r-2 border-white z-10 opacity-90 pointer-events-none"
             style={{
               backgroundImage: 'repeating-conic-gradient(#000 0% 25%, #fff 0% 50%)',
               backgroundSize: '16px 16px',
             }}
           />
 
-          {/* Lanes for each friend */}
-          {room.roster.map((racer, index) => {
-            const isMe = racer.playerId === myPlayerId;
-            const leftPercent = Math.min(84, (racer.progress / 100) * 84);
+          {totalRacers <= 4 ? (
+            /* Traditional full lanes for 2-4 players */
+            <div className="flex-1 flex flex-col justify-around py-1">
+              {room.roster.map(racer => {
+                const isMe = racer.playerId === myPlayerId;
+                const leftPercent = Math.min(84, (racer.progress / 100) * 84);
+                const racerRank = sortedRoster.findIndex(r => r.playerId === racer.playerId) + 1;
 
-            return (
-              <div
-                key={racer.playerId}
-                className={`relative flex-1 border-b border-dashed border-white/30 flex items-center ${
-                  isMe ? 'bg-yellow-400/10' : ''
-                }`}
-              >
-                <div
-                  className={`absolute transition-all duration-150 flex flex-col items-center select-none ${
-                    racer.overheated ? 'sepia hue-rotate-[-50deg] saturate-200' : ''
-                  }`}
-                  style={{ left: `${leftPercent}%` }}
-                >
-                  {/* Name Tag */}
+                return (
                   <div
-                    className={`text-[10px] px-1.5 py-0.2 rounded font-bold whitespace-nowrap shadow -mb-1 z-20 flex items-center gap-1 ${
-                      isMe
-                        ? 'bg-yellow-400 text-slate-900 border border-black'
-                        : 'bg-black/75 text-white border border-white/40'
+                    key={racer.playerId}
+                    className={`relative flex-1 border-b border-dashed border-white/30 flex items-center ${
+                      isMe ? 'bg-yellow-400/15' : ''
                     }`}
                   >
-                    <span>{racer.name} {isMe && '(Vos)'}</span>
-                    {isMe && turboFlash && <span className="animate-ping text-xs">🔥</span>}
-                  </div>
-
-                  {/* Fatigue bar above racer */}
-                  <div className="w-10 h-1 bg-black rounded-full overflow-hidden border border-black/50 my-0.5 z-20">
                     <div
-                      className="h-full bg-gradient-to-r from-yellow-400 to-red-600 transition-all duration-150"
-                      style={{ width: `${Math.min(100, racer.fatigue)}%` }}
-                    />
-                  </div>
-
-                  <div className="relative">
-                    <CreatureSprite speciesId={racer.org.speciesId} mods={racer.org.mods} sizePx={54} />
-                    {isMe && turboFlash && (
-                      <div className="absolute -left-3 top-1/2 -translate-y-1/2 text-sm select-none pointer-events-none animate-bounce">
-                        💨
+                      className={`absolute transition-all duration-150 flex flex-col items-center select-none ${
+                        racer.overheated ? 'sepia hue-rotate-[-50deg] saturate-200' : ''
+                      }`}
+                      style={{ left: `${leftPercent}%` }}
+                    >
+                      <div
+                        className={`text-[10px] px-1.5 py-0.2 rounded font-bold whitespace-nowrap shadow -mb-1 z-20 flex items-center gap-1 ${
+                          isMe
+                            ? 'bg-yellow-400 text-slate-900 border border-black ring-2 ring-yellow-300'
+                            : 'bg-black/75 text-white border border-white/40'
+                        }`}
+                      >
+                        <span>#{racerRank} {racer.name} {isMe && '(Vos)'}</span>
+                        {isMe && turboFlash && <span className="animate-ping text-xs">🔥</span>}
                       </div>
-                    )}
+
+                      <div className="w-10 h-1 bg-black rounded-full overflow-hidden border border-black/50 my-0.5 z-20">
+                        <div
+                          className="h-full bg-gradient-to-r from-yellow-400 to-red-600 transition-all duration-150"
+                          style={{ width: `${Math.min(100, racer.fatigue)}%` }}
+                        />
+                      </div>
+
+                      <div className="relative">
+                        <CreatureSprite speciesId={racer.org.speciesId} mods={racer.org.mods} sizePx={48} />
+                        {isMe && turboFlash && (
+                          <div className="absolute -left-3 top-1/2 -translate-y-1/2 text-sm select-none pointer-events-none animate-bounce">
+                            💨
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </div>
+                );
+              })}
+            </div>
+          ) : (
+            /* Adaptive layout for >4 unlimited players: Spotlight Lane + Live Rivals Pack */
+            <div className="flex-1 flex flex-col h-full">
+              {/* Spotlight Lane: TU CLON */}
+              <div className="h-[90px] relative bg-yellow-400/20 border-b-2 border-yellow-300/60 flex items-center px-2">
+                <div className="absolute left-2 top-1 text-[10px] font-black bg-yellow-400 text-slate-900 px-2 py-0.5 rounded shadow z-20">
+                  ⭐ TU CARRIL (Puesto #{myRank} de {totalRacers})
                 </div>
+
+                {meRacer && (
+                  <div
+                    className={`absolute transition-all duration-150 flex flex-col items-center select-none ${
+                      meRacer.overheated ? 'sepia hue-rotate-[-50deg] saturate-200' : ''
+                    }`}
+                    style={{ left: `${Math.min(84, (meRacer.progress / 100) * 84)}%` }}
+                  >
+                    <div className="text-[10px] px-2 py-0.5 rounded font-black whitespace-nowrap shadow bg-yellow-400 text-slate-900 border border-black flex items-center gap-1 z-20">
+                      <span>{meRacer.name} (Vos) · {meRacer.progress.toFixed(1)}%</span>
+                      {turboFlash && <span className="animate-ping text-xs">🔥</span>}
+                    </div>
+
+                    <div className="relative mt-0.5">
+                      <CreatureSprite speciesId={meRacer.org.speciesId} mods={meRacer.org.mods} sizePx={52} />
+                      {turboFlash && (
+                        <div className="absolute -left-3 top-1/2 -translate-y-1/2 text-sm select-none pointer-events-none animate-bounce">
+                          💨
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
-            );
-          })}
+
+              {/* Scrollable Rivals Pack */}
+              <div className="flex-1 overflow-y-auto p-1.5 space-y-1 bg-black/25">
+                <div className="text-[10px] text-teal-200 font-bold px-1 mb-0.5 flex justify-between">
+                  <span>PELOTÓN DE RIVALES EN TIEMPO REAL:</span>
+                  <span>{totalRacers - 1} oponentes en carrera</span>
+                </div>
+                {sortedRoster
+                  .filter(r => r.playerId !== myPlayerId)
+                  .map((racer, idx) => {
+                    const rank = sortedRoster.findIndex(r => r.playerId === racer.playerId) + 1;
+                    const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `#${rank}`;
+
+                    return (
+                      <div
+                        key={racer.playerId}
+                        className="bg-black/40 border border-white/20 rounded-lg p-1.5 flex items-center gap-2 text-white text-xs"
+                      >
+                        <span className="font-bold font-mono text-yellow-300 w-6 text-center text-xs">
+                          {medal}
+                        </span>
+                        <CreatureSprite speciesId={racer.org.speciesId} mods={racer.org.mods} sizePx={30} />
+                        <div className="w-24 truncate font-bold text-[11px]">{racer.name}</div>
+                        <div className="flex-1 bg-gray-900/80 rounded-full h-3 border border-gray-600 overflow-hidden relative">
+                          <div
+                            className="h-full bg-gradient-to-r from-teal-400 to-emerald-500 transition-all duration-150 rounded-full"
+                            style={{ width: `${Math.min(100, racer.progress)}%` }}
+                          />
+                          <span className="absolute inset-0 flex items-center justify-center text-[9px] font-mono font-bold text-white drop-shadow">
+                            {racer.progress.toFixed(1)}%
+                          </span>
+                        </div>
+                        <div className="w-12 text-right font-mono text-[10px] text-gray-300">
+                          {racer.finished ? (
+                            <span className="text-emerald-400 font-bold">¡META!</span>
+                          ) : (
+                            <span>{Math.round(racer.fatigue)}% fatiga</span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
         </div>
 
-        <p className="text-[11px] text-center text-[#264653] font-medium mt-1">
-          ⚡ Presioná <b>cualquier tecla</b> o el botón para tirar <b>TURBO</b> (¡cuidado con la fatiga!). Presioná <b>[ESPACIO]</b> para tu Habilidad.
-        </p>
+        {/* Guitar Hero Rhythm Highway & Hit Controls */}
+        <div className="mt-1.5 shadow-lg">
+          <GuitarHeroTrack
+            active={room.status === 'racing'}
+            onHit={handleGuitarHeroHit}
+            combo={guitarHeroCombo}
+            onComboChange={setGuitarHeroCombo}
+          />
+        </div>
       </div>
     );
   }
@@ -1180,6 +1362,8 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
   if (room.status === 'podium') {
     const winner = room.results[0];
     const isWinnerMe = winner?.playerId === myPlayerId;
+    const myResult = room.results.find(r => r.playerId === myPlayerId);
+    const myFinishRank = myResult ? myResult.rank : null;
 
     return (
       <div
@@ -1190,69 +1374,78 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
         <div className="text-center my-2">
           <div className="text-4xl mb-1">{isWinnerMe ? '👑 🏆 👑' : '🏁 🏆 🏁'}</div>
           <h2 className="text-2xl font-bold text-yellow-300 drop-shadow">
-            {isWinnerMe ? '¡GANASTE EL DUELO!' : `¡${winner?.name.toUpperCase()} GANÓ EL DUELO!`}
+            {isWinnerMe ? '¡GANASTE LA CARRERA!' : `¡${winner?.name.toUpperCase()} GANÓ LA CARRERA!`}
           </h2>
-          <p className="text-xs text-teal-100">Resultado final sincronizado</p>
+          <p className="text-xs text-teal-100">
+            {room.results.length} corredores completaron la pista sincronizada
+          </p>
+          {myFinishRank && (
+            <div className="inline-block mt-1 bg-yellow-400 text-slate-900 px-3 py-0.5 rounded-full font-black text-xs shadow">
+              Tu resultado: Puesto #{myFinishRank} de {room.results.length}
+            </div>
+          )}
         </div>
 
-        {/* Results List */}
-        <div className="flex flex-col gap-2 my-2">
+        {/* Results List - Scalable for Unlimited Racers */}
+        <div className="flex flex-col gap-2 my-2 max-h-[380px] overflow-y-auto pr-1">
           {room.results.map(res => {
             const isMe = res.playerId === myPlayerId;
-            const medal = res.rank === 1 ? '🥇' : res.rank === 2 ? '🥈' : res.rank === 3 ? '🥉' : '4°';
+            const medal = res.rank === 1 ? '🥇' : res.rank === 2 ? '🥈' : res.rank === 3 ? '🥉' : `${res.rank}°`;
 
             return (
               <div
                 key={res.playerId}
-                className={`flex items-center gap-3 p-2.5 rounded-xl border-2 text-slate-900 shadow-md ${
-                  res.rank === 1
-                    ? 'bg-gradient-to-r from-amber-100 to-yellow-200 border-yellow-400 ring-2 ring-yellow-300'
-                    : 'bg-white/95 border-gray-300'
+                className={`flex items-center gap-3 p-2.5 rounded-xl border-2 text-slate-900 shadow-md transition-all ${
+                  isMe
+                    ? 'bg-gradient-to-r from-yellow-50 to-amber-100 border-yellow-500 ring-2 ring-yellow-400'
+                    : res.rank === 1
+                      ? 'bg-gradient-to-r from-amber-100 to-yellow-200 border-yellow-400'
+                      : 'bg-white/95 border-gray-300'
                 }`}
               >
-                <div className="text-3xl w-8 text-center font-bold">{medal}</div>
-                <CreatureSprite speciesId={res.org.speciesId} mods={res.org.mods} sizePx={52} />
-                <div className="flex-1 text-xs">
-                  <div className="font-bold text-sm text-[#264653] flex justify-between">
-                    <span>
+                <div className="text-2xl w-8 text-center font-black">{medal}</div>
+                <CreatureSprite speciesId={res.org.speciesId} mods={res.org.mods} sizePx={48} />
+                <div className="flex-1 text-xs min-w-0">
+                  <div className="font-bold text-sm text-[#264653] flex justify-between items-center">
+                    <span className="truncate">
                       {res.name} {isMe && '(Vos)'}
                     </span>
-                    <span className="font-mono text-gray-700">{res.finishTime}s</span>
+                    <span className="font-mono text-gray-700 text-xs">{res.finishTime}s</span>
                   </div>
-                  <div className="text-gray-600 font-medium">
+                  <div className="text-gray-600 font-medium truncate">
                     {res.org.baseName} · {res.org.mods.length} mod. genéticas
                   </div>
-                  <div className="text-gray-800 text-[11px] italic mt-0.5">{res.reason}</div>
+                  <div className="text-gray-800 text-[11px] italic mt-0.5 truncate">{res.reason}</div>
                 </div>
               </div>
             );
           })}
         </div>
 
-        {/* Head to Head Comparison */}
+        {/* Head to Head / Top Comparison */}
         {room.results.length >= 2 && (
           <div className="bg-black/30 border border-teal-300/40 rounded-xl p-2.5 my-2 text-xs">
             <h4 className="font-bold text-yellow-300 text-sm mb-1 text-center">
-              ⚔️ COMPARATIVA GENÉTICA DEL DUELO
+              ⚔️ COMPARATIVA GENÉTICA DEL PODIO
             </h4>
             <div className="grid grid-cols-2 gap-2 text-center pt-1 font-mono">
               <div className="bg-black/40 p-2 rounded">
-                <div className="font-bold text-yellow-400">{room.results[0].name}</div>
+                <div className="font-bold text-yellow-400">🥇 {room.results[0].name}</div>
                 <div className="text-[11px] text-gray-300 mt-1">
                   Vel: {Math.round(room.results[0].org.stats.velocidad)} | Res:{' '}
                   {Math.round(room.results[0].org.stats.resistencia)}
                 </div>
-                <div className="text-[10px] text-purple-300 mt-0.5">
+                <div className="text-[10px] text-purple-300 mt-0.5 truncate">
                   {room.results[0].org.ability.name}
                 </div>
               </div>
               <div className="bg-black/40 p-2 rounded">
-                <div className="font-bold text-blue-300">{room.results[1].name}</div>
+                <div className="font-bold text-blue-300">🥈 {room.results[1].name}</div>
                 <div className="text-[11px] text-gray-300 mt-1">
                   Vel: {Math.round(room.results[1].org.stats.velocidad)} | Res:{' '}
                   {Math.round(room.results[1].org.stats.resistencia)}
                 </div>
-                <div className="text-[10px] text-purple-300 mt-0.5">
+                <div className="text-[10px] text-purple-300 mt-0.5 truncate">
                   {room.results[1].org.ability.name}
                 </div>
               </div>

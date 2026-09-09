@@ -194,8 +194,20 @@ export const Facility: React.FC<FacilityProps> = ({
         </button>
 
         <button
-          onClick={onOpenDuelLobby}
-          className="btn py-2 px-3 text-sm font-bold cursor-pointer bg-amber-400 text-slate-900 border-2 border-yellow-100 shadow"
+          onClick={() => {
+            if (organisms.length === 0) {
+              onCreateNewClone();
+            } else {
+              onOpenDuelLobby();
+            }
+          }}
+          disabled={organisms.length === 0}
+          className={`btn py-2 px-3 text-sm font-bold border-2 shadow ${
+            organisms.length === 0
+              ? 'bg-gray-400 text-gray-700 border-gray-500 opacity-50 cursor-not-allowed'
+              : 'bg-amber-400 text-slate-900 border-yellow-100 cursor-pointer'
+          }`}
+          title={organisms.length === 0 ? 'Creá primero un espécimen en el laboratorio' : 'Entrar a duelos contra amigos'}
         >
           ⚔️ SALA DE DUELOS
         </button>
