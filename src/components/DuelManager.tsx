@@ -3,6 +3,7 @@ import html2canvas from 'html2canvas';
 import { Organism, Scientist, DuelRoomState, DuelPlayer, RacerState } from '../types';
 import { BASE_ORGANISMS, ABILITIES } from '../data/gameData';
 import { CreatureSprite } from './CreatureSprite';
+import { PeerDuelService } from '../services/peerDuelService';
 
 interface DuelManagerProps {
   scientist: Scientist;
@@ -20,6 +21,7 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
   onAddNewOrganism,
 }) => {
   const [ws, setWs] = useState<WebSocket | null>(null);
+  const [transport, setTransport] = useState<'ws' | 'p2p'>('ws');
   const [connected, setConnected] = useState(false);
   const [room, setRoom] = useState<DuelRoomState | null>(null);
   const [myPlayerId, setMyPlayerId] = useState<string>('');
@@ -40,6 +42,7 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
 
   const podiumRef = useRef<HTMLDivElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const p2pRef = useRef<PeerDuelService | null>(null);
 
   // Fallback starter organism if player has none
   const ensureOrganism = (): Organism => {
@@ -61,84 +64,147 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
     return starter;
   };
 
-  // Connect to WebSocket
-  useEffect(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws`;
-    const socket = new WebSocket(wsUrl);
-
-    socket.onopen = () => {
-      setConnected(true);
+  // Shared game message processor
+  const handleGameMessage = (msg: any) => {
+    if (msg.type === 'ROOM_CREATED' || msg.type === 'ROOM_JOINED') {
+      setRoom(msg.room);
+      setMyPlayerId(msg.playerId);
       setErrorMessage('');
-
-      // If there's an initial room code from URL query (?duel=XYZ)
-      if (initialDuelCode) {
-        const org = ensureOrganism();
-        socket.send(
-          JSON.stringify({
-            type: 'JOIN_ROOM',
-            roomCode: initialDuelCode.toUpperCase(),
-            playerName: scientist.name,
-            avatarKey: scientist.avatarKey,
-            organism: org,
-          })
-        );
+    } else if (msg.type === 'ROOM_UPDATE') {
+      setRoom(msg.room);
+    } else if (msg.type === 'COUNTDOWN') {
+      setCountdownDisplay(msg.count);
+      if (msg.count === '¡YA!') {
+        setTimeout(() => setCountdownDisplay(null), 1000);
       }
-    };
+    } else if (msg.type === 'RACE_STARTED') {
+      setRoom(msg.room);
+      setCountdownDisplay(null);
+    } else if (msg.type === 'RACE_TICK') {
+      setRoom(prev => (prev ? { ...prev, roster: msg.roster, activeEvent: msg.activeEvent } : prev));
+    } else if (msg.type === 'RACE_EVENT') {
+      setRoom(prev => (prev ? { ...prev, activeEvent: msg.event } : prev));
+    } else if (msg.type === 'ABILITY_TRIGGERED') {
+      setAbilityBanner(msg.message);
+      setTimeout(() => setAbilityBanner(null), 3000);
+      setRoom(prev => (prev ? { ...prev, roster: msg.roster } : prev));
+    } else if (msg.type === 'RACE_FINISHED') {
+      setRoom(msg.room);
+    } else if (msg.type === 'CHAT_MESSAGE') {
+      setRoom(prev =>
+        prev ? { ...prev, chatMessages: [...prev.chatMessages, msg.message].slice(-25) } : prev
+      );
+    } else if (msg.type === 'ERROR') {
+      setErrorMessage(msg.message);
+    }
+  };
 
-    socket.onclose = () => {
-      setConnected(false);
-    };
+  // Connect via WebSocket or fallback to PeerJS (WebRTC) for Vercel/static deployments
+  useEffect(() => {
+    let wsInstance: WebSocket | null = null;
+    let isMounted = true;
+    let wsConnected = false;
 
-    socket.onerror = err => {
-      console.error('WebSocket error', err);
-      setErrorMessage('Error de conexión con el servidor de duelos.');
-    };
-
-    socket.onmessage = event => {
-      try {
-        const msg = JSON.parse(event.data);
-
-        if (msg.type === 'ROOM_CREATED' || msg.type === 'ROOM_JOINED') {
-          setRoom(msg.room);
-          setMyPlayerId(msg.playerId);
+    // Initialize P2P service fallback
+    const p2p = new PeerDuelService({
+      onMessage: msg => {
+        if (isMounted) handleGameMessage(msg);
+      },
+      onError: err => {
+        if (isMounted) setErrorMessage(err);
+      },
+      onConnected: () => {
+        if (isMounted) {
+          setConnected(true);
           setErrorMessage('');
-        } else if (msg.type === 'ROOM_UPDATE') {
-          setRoom(msg.room);
-        } else if (msg.type === 'COUNTDOWN') {
-          setCountdownDisplay(msg.count);
-          if (msg.count === '¡YA!') {
-            setTimeout(() => setCountdownDisplay(null), 1000);
-          }
-        } else if (msg.type === 'RACE_STARTED') {
-          setRoom(msg.room);
-          setCountdownDisplay(null);
-        } else if (msg.type === 'RACE_TICK') {
-          setRoom(prev => (prev ? { ...prev, roster: msg.roster, activeEvent: msg.activeEvent } : prev));
-        } else if (msg.type === 'RACE_EVENT') {
-          setRoom(prev => (prev ? { ...prev, activeEvent: msg.event } : prev));
-        } else if (msg.type === 'ABILITY_TRIGGERED') {
-          setAbilityBanner(msg.message);
-          setTimeout(() => setAbilityBanner(null), 3000);
-          setRoom(prev => (prev ? { ...prev, roster: msg.roster } : prev));
-        } else if (msg.type === 'RACE_FINISHED') {
-          setRoom(msg.room);
-        } else if (msg.type === 'CHAT_MESSAGE') {
-          setRoom(prev =>
-            prev ? { ...prev, chatMessages: [...prev.chatMessages, msg.message].slice(-25) } : prev
-          );
-        } else if (msg.type === 'ERROR') {
-          setErrorMessage(msg.message);
         }
-      } catch (err) {
-        console.error('Error parsing WS message', err);
-      }
-    };
+      },
+      onDisconnected: () => {
+        if (isMounted) setConnected(false);
+      },
+    });
+    p2pRef.current = p2p;
 
-    setWs(socket);
+    try {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/ws`;
+      wsInstance = new WebSocket(wsUrl);
+
+      const wsTimeout = setTimeout(() => {
+        if (!wsConnected && isMounted) {
+          console.info('Servidor WebSocket no disponible. Activando modo Peer-to-Peer para Vercel/WebRTC.');
+          setTransport('p2p');
+          setConnected(true);
+          if (initialDuelCode) {
+            const org = ensureOrganism();
+            p2p.joinRoom(initialDuelCode, scientist.name, scientist.avatarKey, org);
+          }
+        }
+      }, 1200);
+
+      wsInstance.onopen = () => {
+        wsConnected = true;
+        clearTimeout(wsTimeout);
+        if (!isMounted) return;
+        setTransport('ws');
+        setConnected(true);
+        setErrorMessage('');
+
+        if (initialDuelCode) {
+          const org = ensureOrganism();
+          wsInstance?.send(
+            JSON.stringify({
+              type: 'JOIN_ROOM',
+              roomCode: initialDuelCode.toUpperCase(),
+              playerName: scientist.name,
+              avatarKey: scientist.avatarKey,
+              organism: org,
+            })
+          );
+        }
+      };
+
+      wsInstance.onclose = () => {
+        if (!wsConnected && isMounted) {
+          clearTimeout(wsTimeout);
+          setTransport('p2p');
+          setConnected(true);
+        } else if (isMounted) {
+          setConnected(false);
+        }
+      };
+
+      wsInstance.onerror = () => {
+        if (!wsConnected && isMounted) {
+          clearTimeout(wsTimeout);
+          setTransport('p2p');
+          setConnected(true);
+          if (initialDuelCode) {
+            const org = ensureOrganism();
+            p2p.joinRoom(initialDuelCode, scientist.name, scientist.avatarKey, org);
+          }
+        }
+      };
+
+      wsInstance.onmessage = event => {
+        try {
+          const msg = JSON.parse(event.data);
+          handleGameMessage(msg);
+        } catch (err) {
+          console.error('Error al procesar mensaje WS', err);
+        }
+      };
+
+      setWs(wsInstance);
+    } catch (e) {
+      setTransport('p2p');
+      setConnected(true);
+    }
 
     return () => {
-      socket.close();
+      isMounted = false;
+      if (wsInstance) wsInstance.close();
+      p2p.destroy();
     };
   }, []);
 
@@ -157,22 +223,23 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [room?.status, ws]);
+  }, [room?.status, transport, ws]);
 
   const handleCreateRoom = () => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      setErrorMessage('No hay conexión con el servidor. Reintentando...');
-      return;
-    }
     const org = ensureOrganism();
-    ws.send(
-      JSON.stringify({
-        type: 'CREATE_ROOM',
-        playerName: scientist.name,
-        avatarKey: scientist.avatarKey,
-        organism: org,
-      })
-    );
+    if (transport === 'ws' && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(
+        JSON.stringify({
+          type: 'CREATE_ROOM',
+          playerName: scientist.name,
+          avatarKey: scientist.avatarKey,
+          organism: org,
+        })
+      );
+    } else {
+      // P2P WebRTC fallback for Vercel
+      p2pRef.current?.createRoom(scientist.name, scientist.avatarKey, org);
+    }
   };
 
   const handleJoinRoom = (codeToJoin?: string) => {
@@ -181,64 +248,86 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
       setErrorMessage('Ingresá el código de 4 letras de la sala.');
       return;
     }
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      setErrorMessage('No hay conexión con el servidor.');
-      return;
-    }
     const org = ensureOrganism();
-    ws.send(
-      JSON.stringify({
-        type: 'JOIN_ROOM',
-        roomCode: targetCode,
-        playerName: scientist.name,
-        avatarKey: scientist.avatarKey,
-        organism: org,
-      })
-    );
+    if (transport === 'ws' && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(
+        JSON.stringify({
+          type: 'JOIN_ROOM',
+          roomCode: targetCode,
+          playerName: scientist.name,
+          avatarKey: scientist.avatarKey,
+          organism: org,
+        })
+      );
+    } else {
+      // P2P WebRTC fallback for Vercel
+      p2pRef.current?.joinRoom(targetCode, scientist.name, scientist.avatarKey, org);
+    }
   };
 
   const handleSelectDifferentOrganism = (org: Organism) => {
     setSelectedOrg(org);
-    if (ws && ws.readyState === WebSocket.OPEN && room) {
+    if (transport === 'ws' && ws && ws.readyState === WebSocket.OPEN && room) {
       ws.send(
         JSON.stringify({
           type: 'UPDATE_ORGANISM',
           organism: org,
         })
       );
+    } else if (transport === 'p2p') {
+      p2pRef.current?.updateOrganism(org);
     }
   };
 
   const handleToggleReady = () => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ type: 'TOGGLE_READY' }));
+    if (transport === 'ws' && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'TOGGLE_READY' }));
+    } else if (transport === 'p2p') {
+      p2pRef.current?.toggleReady();
+    }
   };
 
   const handleStartRace = () => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ type: 'START_RACE' }));
+    if (transport === 'ws' && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'START_RACE' }));
+    } else if (transport === 'p2p') {
+      p2pRef.current?.startRace();
+    }
   };
 
   const handleUseAbility = () => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ type: 'USE_ABILITY' }));
+    if (transport === 'ws' && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'USE_ABILITY' }));
+    } else if (transport === 'p2p') {
+      p2pRef.current?.useAbility();
+    }
   };
 
   const handleSendChat = (textToSend?: string) => {
     const text = (textToSend || chatInput).trim();
-    if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ type: 'SEND_CHAT', text }));
-    setChatInput('');
+    if (!text) return;
+    if (transport === 'ws' && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'SEND_CHAT', text }));
+      setChatInput('');
+    } else if (transport === 'p2p') {
+      p2pRef.current?.sendChat(text);
+      setChatInput('');
+    }
   };
 
   const handleRequestRematch = () => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ type: 'REQUEST_REMATCH' }));
+    if (transport === 'ws' && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'REQUEST_REMATCH' }));
+    } else if (transport === 'p2p') {
+      p2pRef.current?.requestRematch();
+    }
   };
 
   const handleLeaveRoom = () => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
+    if (transport === 'ws' && ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'LEAVE_ROOM' }));
+    } else if (transport === 'p2p') {
+      p2pRef.current?.leaveRoom();
     }
     setRoom(null);
     setErrorMessage('');
@@ -293,10 +382,14 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
           <div className="flex items-center gap-1.5 text-xs font-mono">
             <span
               className={`w-2.5 h-2.5 rounded-full ${
-                connected ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'
+                connected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
               }`}
             />
-            {connected ? 'Servidor Online' : 'Conectando...'}
+            {connected
+              ? transport === 'p2p'
+                ? '🌐 Red Directa P2P (Vercel)'
+                : '⚡ Servidor WebSocket'
+              : 'Conectando...'}
           </div>
         </div>
 
