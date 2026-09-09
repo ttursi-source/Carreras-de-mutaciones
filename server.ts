@@ -421,7 +421,7 @@ wss.on('connection', (ws: WebSocket) => {
         let room = rooms.get(code);
 
         if (!room) {
-          if (data.autoCreateIfMissing || code.startsWith('PUB')) {
+          if (data.autoCreateIfMissing || code.startsWith('PUB') || /^\d+$/.test(code) || code.startsWith('SALA')) {
             currentRoomCode = code;
             currentUserId = data.playerId || `p_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
             const player: DuelPlayer = {

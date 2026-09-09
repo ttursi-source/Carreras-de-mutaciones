@@ -8,9 +8,10 @@ import { Facility } from './components/Facility';
 import { SoloRace } from './components/SoloRace';
 import { SoloPodium } from './components/SoloPodium';
 import { DuelManager } from './components/DuelManager';
+import { CloneCreator } from './components/CloneCreator';
 import { generateRandomClone } from './utils/cloneGenerator';
 
-type Screen = 'start' | 'scientist' | 'dilemma' | 'incubator' | 'facility' | 'solo_race' | 'solo_podium' | 'duel';
+type Screen = 'start' | 'scientist' | 'dilemma' | 'incubator' | 'facility' | 'solo_race' | 'solo_podium' | 'duel' | 'create_duel_clone';
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>('start');
@@ -74,6 +75,7 @@ export default function App() {
 
   // Duel room code if user arrived via invite link
   const [duelInviteCode, setDuelInviteCode] = useState<string | null>(null);
+  const [returnScreenFromClone, setReturnScreenFromClone] = useState<Screen>('start');
 
   // Detect query parameters (?duel=CODE or ?room=CODE)
   useEffect(() => {
@@ -82,7 +84,8 @@ export default function App() {
       const duelCode = params.get('duel') || params.get('room');
       if (duelCode) {
         setDuelInviteCode(duelCode.toUpperCase());
-        setScreen('duel');
+        setReturnScreenFromClone('start');
+        setScreen('create_duel_clone');
       }
     } catch (e) {
       console.error('Error parsing query params', e);
@@ -142,10 +145,18 @@ export default function App() {
 
   const handleStartDuelFromOrganism = (org: Organism) => {
     setSelectedOrganism(org);
-    setScreen('duel');
+    setReturnScreenFromClone('facility');
+    setScreen('create_duel_clone');
   };
 
   const handleOpenDuelLobby = () => {
+    setReturnScreenFromClone(screen);
+    setScreen('create_duel_clone');
+  };
+
+  const handleConfirmDuelClone = (newClone: Organism) => {
+    setOrganisms(prev => [newClone, ...prev.filter(o => o.id !== newClone.id)]);
+    setSelectedOrganism(newClone);
     setScreen('duel');
   };
 
@@ -357,6 +368,15 @@ export default function App() {
         />
       )}
 
+      {/* ================= SCREEN: CREATE CLONE FOR DUEL ================= */}
+      {screen === 'create_duel_clone' && (
+        <CloneCreator
+          scientist={scientist}
+          onConfirmClone={handleConfirmDuelClone}
+          onBack={() => setScreen(returnScreenFromClone || 'start')}
+        />
+      )}
+
       {/* ================= SCREEN: DUELS (ONLINE MULTIPLAYER) ================= */}
       {screen === 'duel' && (
         <DuelManager
@@ -365,6 +385,10 @@ export default function App() {
           initialDuelCode={duelInviteCode}
           onExit={() => setScreen('facility')}
           onAddNewOrganism={handleAddNewOrganism}
+          onOpenCloneCreator={() => {
+            setReturnScreenFromClone('duel');
+            setScreen('create_duel_clone');
+          }}
         />
       )}
     </main>

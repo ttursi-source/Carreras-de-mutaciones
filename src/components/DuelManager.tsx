@@ -12,6 +12,7 @@ interface DuelManagerProps {
   initialDuelCode?: string | null;
   onExit: () => void;
   onAddNewOrganism: (org: Organism) => void;
+  onOpenCloneCreator?: () => void;
 }
 
 export const DuelManager: React.FC<DuelManagerProps> = ({
@@ -20,6 +21,7 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
   initialDuelCode = null,
   onExit,
   onAddNewOrganism,
+  onOpenCloneCreator,
 }) => {
   const [ws, setWs] = useState<WebSocket | null>(null);
   const [transport, setTransport] = useState<'ws' | 'p2p'>('ws');
@@ -35,6 +37,7 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
   const [activeTab, setActiveTab] = useState<'public' | 'private'>('public');
   const [publicRooms, setPublicRooms] = useState<any[]>([]);
   const [customPublicCode, setCustomPublicCode] = useState('');
+  const [customRoomNumber, setCustomRoomNumber] = useState('');
 
   // Turbo mechanics
   const [turboFlash, setTurboFlash] = useState(false);
@@ -443,12 +446,7 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
 
   // ================= VIEW 1: NO ROOM JOINED YET (Lobby Browser) =================
   if (!room) {
-    const PUBLIC_ARENAS = [
-      { code: 'PUB1', name: '🏆 Arena Titán', tag: 'Sprint Veloz', desc: 'Duelo rápido ideal para especímenes de alta velocidad.' },
-      { code: 'PUB2', name: '⚡ Arena Génesis', tag: 'Duelo Balanceado', desc: 'Pista clásica para probar híbridos recién modificados.' },
-      { code: 'PUB3', name: '🧪 Lab Alfa', tag: 'Resistencia Extrema', desc: 'Carrera de fondo donde la gestión de fatiga define el podio.' },
-      { code: 'PUB4', name: '🧬 Coliseo Mutante', tag: 'Poderes Genéticos', desc: 'Choque impredecible de mutaciones y habilidades.' },
-    ];
+    const NUMBERED_ROOMS = [1, 2, 3, 4, 5, 6, 7, 8];
 
     return (
       <div className="flex-1 flex flex-col w-full h-full bg-gradient-to-br from-[#fdf6e3] via-[#e0d8c3] to-[#d8cca8] overflow-y-auto p-4 select-none">
@@ -475,7 +473,7 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
             DUELOS MULTIJUGADOR
           </h1>
           <p className="text-xs text-[#264653] max-w-md mx-auto">
-            Competí en tiempo real con <b>tus propios clones</b> en lobbys públicos abiertos o en salas privadas entre amigos.
+            Competí en tiempo real con <b>tu clon personalizado</b> en las salas públicas o en salas privadas.
           </p>
         </div>
 
@@ -491,13 +489,24 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
             <span className="text-xs font-bold text-[#264653] uppercase">
               🧬 Tu Clon para la Carrera:
             </span>
-            <button
-              onClick={handleGenerateNewClone}
-              className="text-xs bg-purple-600 hover:bg-purple-700 text-white font-bold px-2.5 py-1 rounded-lg cursor-pointer shadow flex items-center gap-1 transition active:scale-95"
-              title="Crea un clon mutante aleatorio con estadísticas y habilidades únicas"
-            >
-              + 🧬 Clonar Nuevo Espécimen
-            </button>
+            <div className="flex gap-1.5">
+              {onOpenCloneCreator && (
+                <button
+                  onClick={onOpenCloneCreator}
+                  className="text-xs bg-purple-600 hover:bg-purple-700 text-white font-bold px-2.5 py-1 rounded-lg cursor-pointer shadow flex items-center gap-1 transition active:scale-95"
+                  title="Personalizá o creá un nuevo clon"
+                >
+                  🧬 Crear / Editar Clon
+                </button>
+              )}
+              <button
+                onClick={handleGenerateNewClone}
+                className="text-xs bg-amber-500 hover:bg-amber-600 text-white font-bold px-2 py-1 rounded-lg cursor-pointer shadow flex items-center gap-1 transition active:scale-95"
+                title="Crea un clon mutante aleatorio"
+              >
+                🎲 Aleatorio
+              </button>
+            </div>
           </div>
 
           {selectedOrg ? (
@@ -558,7 +567,7 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
                   : 'text-[#264653] hover:bg-white/40'
               }`}
             >
-              🌍 LOBBYS PÚBLICOS (Encontrar Partida)
+              🌍 SALAS PÚBLICAS (1, 2, 3...)
             </button>
             <button
               onClick={() => setActiveTab('private')}
@@ -573,42 +582,97 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
           </div>
         </div>
 
-        {/* TAB 1: PUBLIC LOBBIES */}
+        {/* TAB 1: PUBLIC NUMBERED ROOMS */}
         {activeTab === 'public' && (
           <div className="max-w-lg mx-auto w-full space-y-3">
             <div className="bg-amber-100/90 border border-amber-300 text-amber-900 px-3 py-2 rounded-xl text-xs flex items-center justify-between shadow-sm">
               <span>
-                🏁 <b>Salas Públicas Abiertas:</b> Tocá en cualquier arena para entrar. Si hay un rival, compiten al instante; si no, la sala queda abierta para que se una tu próximo retador.
+                🏁 <b>Salas Públicas:</b> Todas las salas tienen las mismas condiciones reglamentarias. Tocá en cualquier sala para ingresar y competir.
               </span>
             </div>
 
-            {/* Quick Public Arenas Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {PUBLIC_ARENAS.map(arena => (
-                <div
-                  key={arena.code}
-                  className="bg-white border-2 border-[#264653] rounded-xl p-3 shadow-sm hover:shadow-md transition flex flex-col justify-between"
-                >
-                  <div>
-                    <div className="flex justify-between items-center mb-1">
-                      <span className="font-bold text-sm text-[#264653]">{arena.name}</span>
-                      <span className="text-[10px] font-mono bg-amber-200 text-amber-900 px-1.5 py-0.5 rounded font-bold">
-                        {arena.code}
-                      </span>
-                    </div>
-                    <div className="text-[10px] font-bold text-teal-700 mb-1">{arena.tag}</div>
-                    <p className="text-[11px] text-gray-600 mb-2 leading-tight">{arena.desc}</p>
-                  </div>
+            {/* Grid of Equal Numbered Rooms: Sala 1, Sala 2, etc. */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {NUMBERED_ROOMS.map(num => {
+                const roomCode = String(num);
+                const activeRoom = publicRooms.find(pr => String(pr.code) === roomCode);
+                const count = activeRoom ? activeRoom.playerCount : 0;
+                const hasPlayers = count > 0;
 
-                  <button
-                    onClick={() => handleJoinPublicArena(arena.code)}
-                    disabled={!connected}
-                    className="btn btn-fight w-full py-1.5 text-xs font-bold cursor-pointer"
+                return (
+                  <div
+                    key={num}
+                    className="bg-white border-2 border-[#264653] rounded-xl p-3 shadow-sm hover:shadow-md transition flex flex-col justify-between"
                   >
-                    ⚔️ ENTRAR A COMPETIR
-                  </button>
-                </div>
-              ))}
+                    <div>
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="font-bold text-base text-[#264653]">Sala {num}</span>
+                        <span className="text-[11px] font-mono bg-amber-200 text-amber-900 px-2 py-0.5 rounded-full font-bold">
+                          #{num}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-gray-500 mb-1.5">
+                        Pista Estándar de Competencia · 2 a 4 Jugadores
+                      </div>
+                      <div className="text-xs font-bold mb-2 flex items-center gap-1.5">
+                        <span
+                          className={`w-2.5 h-2.5 rounded-full ${
+                            hasPlayers ? 'bg-emerald-500 animate-pulse' : 'bg-gray-300'
+                          }`}
+                        />
+                        {hasPlayers ? (
+                          <span className="text-emerald-700">
+                            {count}/4 Jugadores (Anfitrión: {activeRoom.hostName})
+                          </span>
+                        ) : (
+                          <span className="text-gray-500">Disponible (0/4 jugadores)</span>
+                        )}
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => handleJoinPublicArena(roomCode)}
+                      disabled={!connected}
+                      className="btn btn-fight w-full py-2 text-xs font-bold cursor-pointer tracking-wide"
+                    >
+                      ⚔️ ENTRAR A SALA {num}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Quick entry to any room number */}
+            <div className="bg-white/90 border-2 border-[#264653] rounded-xl p-3 text-center shadow-sm">
+              <span className="text-xs font-bold text-[#264653] block mb-1.5">
+                ¿Querés entrar a otra sala numerada? (Ej: 9, 10, 11, etc.)
+              </span>
+              <div className="flex gap-2 max-w-xs mx-auto">
+                <input
+                  type="number"
+                  min="1"
+                  placeholder="N° de Sala"
+                  value={customRoomNumber}
+                  onChange={e => setCustomRoomNumber(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && customRoomNumber.trim()) {
+                      handleJoinPublicArena(customRoomNumber.trim());
+                    }
+                  }}
+                  className="flex-1 font-mono text-center text-sm font-bold border-2 border-[#264653] rounded-lg p-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-amber-400"
+                />
+                <button
+                  onClick={() => {
+                    if (customRoomNumber.trim()) {
+                      handleJoinPublicArena(customRoomNumber.trim());
+                    }
+                  }}
+                  disabled={!connected || !customRoomNumber.trim()}
+                  className="btn btn-primary text-xs px-4 py-1.5 font-bold cursor-pointer"
+                >
+                  ENTRAR
+                </button>
+              </div>
             </div>
 
             {/* Active rooms found on WebSocket server */}
@@ -842,13 +906,24 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
         <div className="bg-white/90 border border-gray-300 rounded-xl p-2 mb-2 text-xs">
           <div className="flex justify-between items-center mb-1">
             <span className="font-bold text-gray-700">Tu espécimen para la carrera:</span>
-            <button
-              onClick={handleGenerateNewClone}
-              className="text-[11px] bg-purple-600 hover:bg-purple-700 text-white font-bold px-2.5 py-0.5 rounded cursor-pointer shadow flex items-center gap-1 transition active:scale-95"
-              title="Crea un clon mutante único con sus propios stats y habilidades"
-            >
-              + 🧬 Clonar Nuevo Espécimen
-            </button>
+            <div className="flex gap-1">
+              {onOpenCloneCreator && (
+                <button
+                  onClick={onOpenCloneCreator}
+                  className="text-[11px] bg-purple-600 hover:bg-purple-700 text-white font-bold px-2 py-0.5 rounded cursor-pointer shadow flex items-center gap-1 transition active:scale-95"
+                  title="Diseñá un clon personalizado"
+                >
+                  🧬 Personalizar
+                </button>
+              )}
+              <button
+                onClick={handleGenerateNewClone}
+                className="text-[11px] bg-amber-500 hover:bg-amber-600 text-white font-bold px-2 py-0.5 rounded cursor-pointer shadow flex items-center gap-1 transition active:scale-95"
+                title="Crea un clon mutante único con sus propios stats y habilidades"
+              >
+                + 🎲 Clonar
+              </button>
+            </div>
           </div>
           {organisms.length > 0 && (
             <div className="flex gap-1.5 overflow-x-auto pt-1">
