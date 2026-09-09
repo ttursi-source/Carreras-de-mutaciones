@@ -78,6 +78,7 @@ export interface RacerState {
   finished: boolean;
   finishRank?: number;
   finishTime?: number;
+  turboActive?: boolean;
 }
 
 export interface DuelResult {
@@ -95,9 +96,22 @@ export interface ChatMessage {
   time: string;
 }
 
+export interface PublicRoomSummary {
+  code: string;
+  name?: string;
+  hostName: string;
+  hostAvatarKey?: string;
+  hostOrganismName: string;
+  hostSpeciesId: number;
+  playerCount: number;
+  maxPlayers: number;
+  status: 'lobby' | 'countdown' | 'racing';
+}
+
 export interface DuelRoomState {
   code: string;
   status: 'lobby' | 'countdown' | 'racing' | 'podium';
+  isPublic?: boolean;
   players: DuelPlayer[];
   activeEvent: { id: string; name: string } | null;
   roster: RacerState[];

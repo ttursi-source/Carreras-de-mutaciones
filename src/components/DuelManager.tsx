@@ -4,6 +4,7 @@ import { Organism, Scientist, DuelRoomState, DuelPlayer, RacerState } from '../t
 import { BASE_ORGANISMS, ABILITIES } from '../data/gameData';
 import { CreatureSprite } from './CreatureSprite';
 import { PeerDuelService } from '../services/peerDuelService';
+import { generateRandomClone } from '../utils/cloneGenerator';
 
 interface DuelManagerProps {
   scientist: Scientist;
@@ -29,6 +30,15 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
+
+  // Tabs for lobby selection
+  const [activeTab, setActiveTab] = useState<'public' | 'private'>('public');
+  const [publicRooms, setPublicRooms] = useState<any[]>([]);
+  const [customPublicCode, setCustomPublicCode] = useState('');
+
+  // Turbo mechanics
+  const [turboFlash, setTurboFlash] = useState(false);
+  const [turboCooldown, setTurboCooldown] = useState(false);
 
   // Selected specimen for duel
   const [selectedOrg, setSelectedOrg] = useState<Organism | null>(() => {
@@ -88,6 +98,16 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
       setAbilityBanner(msg.message);
       setTimeout(() => setAbilityBanner(null), 3000);
       setRoom(prev => (prev ? { ...prev, roster: msg.roster } : prev));
+    } else if (msg.type === 'TURBO_TRIGGERED') {
+      if (msg.roster) {
+        setRoom(prev => (prev ? { ...prev, roster: msg.roster } : prev));
+      }
+      if (msg.playerId === myPlayerId) {
+        setTurboFlash(true);
+        setTimeout(() => setTurboFlash(false), 200);
+      }
+    } else if (msg.type === 'PUBLIC_ROOMS_LIST') {
+      setPublicRooms(msg.rooms || []);
     } else if (msg.type === 'RACE_FINISHED') {
       setRoom(msg.room);
     } else if (msg.type === 'CHAT_MESSAGE') {
@@ -213,19 +233,54 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [room?.chatMessages]);
 
-  // Spacebar to trigger ability during duel race
+  // Poll public rooms if on WebSocket and in lobby view
+  useEffect(() => {
+    if (transport === 'ws' && ws && ws.readyState === WebSocket.OPEN && !room) {
+      ws.send(JSON.stringify({ type: 'GET_PUBLIC_ROOMS' }));
+      const interval = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN && !room) {
+          ws.send(JSON.stringify({ type: 'GET_PUBLIC_ROOMS' }));
+        }
+      }, 3500);
+      return () => clearInterval(interval);
+    }
+  }, [transport, ws, room]);
+
+  // Keyboard controls during race:
+  // [ESPACIO] = Habilidad especial
+  // CUALQUIER OTRA TECLA = Turbo boost!
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && room?.status === 'racing') {
+      if (room?.status !== 'racing') return;
+      if (e.code === 'Space') {
         e.preventDefault();
         handleUseAbility();
+      } else {
+        // Any key generates turbo!
+        handleUseTurbo();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [room?.status, transport, ws]);
+  }, [room?.status, transport, ws, turboCooldown]);
 
-  const handleCreateRoom = () => {
+  const handleUseTurbo = () => {
+    if (room?.status !== 'racing') return;
+    if (turboCooldown) return;
+    setTurboCooldown(true);
+    setTimeout(() => setTurboCooldown(false), 150);
+
+    setTurboFlash(true);
+    setTimeout(() => setTurboFlash(false), 200);
+
+    if (transport === 'ws' && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'USE_TURBO' }));
+    } else if (transport === 'p2p') {
+      p2pRef.current?.useTurbo();
+    }
+  };
+
+  const handleCreateRoom = (customCode?: string, isPublic = true) => {
     const org = ensureOrganism();
     if (transport === 'ws' && ws && ws.readyState === WebSocket.OPEN) {
       ws.send(
@@ -234,15 +289,16 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
           playerName: scientist.name,
           avatarKey: scientist.avatarKey,
           organism: org,
+          isPublic,
         })
       );
     } else {
       // P2P WebRTC fallback for Vercel
-      p2pRef.current?.createRoom(scientist.name, scientist.avatarKey, org);
+      p2pRef.current?.createRoom(scientist.name, scientist.avatarKey, org, customCode, isPublic);
     }
   };
 
-  const handleJoinRoom = (codeToJoin?: string) => {
+  const handleJoinRoom = (codeToJoin?: string, autoCreateIfMissing = false) => {
     const targetCode = (codeToJoin || inputCode).toUpperCase().trim();
     if (!targetCode) {
       setErrorMessage('Ingresá el código de 4 letras de la sala.');
@@ -257,11 +313,25 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
           playerName: scientist.name,
           avatarKey: scientist.avatarKey,
           organism: org,
+          autoCreateIfMissing,
         })
       );
     } else {
       // P2P WebRTC fallback for Vercel
-      p2pRef.current?.joinRoom(targetCode, scientist.name, scientist.avatarKey, org);
+      p2pRef.current?.joinRoom(targetCode, scientist.name, scientist.avatarKey, org, autoCreateIfMissing);
+    }
+  };
+
+  const handleJoinPublicArena = (arenaCode: string) => {
+    handleJoinRoom(arenaCode, true);
+  };
+
+  const handleGenerateNewClone = () => {
+    const newClone = generateRandomClone(scientist.name);
+    onAddNewOrganism(newClone);
+    setSelectedOrg(newClone);
+    if (room && (room.status === 'lobby' || room.status === 'countdown')) {
+      handleSelectDifferentOrganism(newClone);
     }
   };
 
@@ -373,6 +443,13 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
 
   // ================= VIEW 1: NO ROOM JOINED YET (Lobby Browser) =================
   if (!room) {
+    const PUBLIC_ARENAS = [
+      { code: 'PUB1', name: '🏆 Arena Titán', tag: 'Sprint Veloz', desc: 'Duelo rápido ideal para especímenes de alta velocidad.' },
+      { code: 'PUB2', name: '⚡ Arena Génesis', tag: 'Duelo Balanceado', desc: 'Pista clásica para probar híbridos recién modificados.' },
+      { code: 'PUB3', name: '🧪 Lab Alfa', tag: 'Resistencia Extrema', desc: 'Carrera de fondo donde la gestión de fatiga define el podio.' },
+      { code: 'PUB4', name: '🧬 Coliseo Mutante', tag: 'Poderes Genéticos', desc: 'Choque impredecible de mutaciones y habilidades.' },
+    ];
+
     return (
       <div className="flex-1 flex flex-col w-full h-full bg-gradient-to-br from-[#fdf6e3] via-[#e0d8c3] to-[#d8cca8] overflow-y-auto p-4 select-none">
         <div className="flex justify-between items-center mb-3">
@@ -387,18 +464,18 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
             />
             {connected
               ? transport === 'p2p'
-                ? '🌐 Red Directa P2P (Vercel)'
+                ? '🌐 Red P2P Directa (Sin Servidor)'
                 : '⚡ Servidor WebSocket'
               : 'Conectando...'}
           </div>
         </div>
 
-        <div className="text-center mb-4">
+        <div className="text-center mb-3">
           <h1 className="pixel-text text-3xl font-bold text-[#e76f51] leading-none mb-1">
-            DUELOS ENTRE AMIGOS
+            DUELOS MULTIJUGADOR
           </h1>
-          <p className="text-sm text-[#264653]">
-            Competí en duelos 1 vs 1 en tiempo real con tus amigos usando los organismos de tu laboratorio.
+          <p className="text-xs text-[#264653] max-w-md mx-auto">
+            Competí en tiempo real con <b>tus propios clones</b> en lobbys públicos abiertos o en salas privadas entre amigos.
           </p>
         </div>
 
@@ -408,25 +485,40 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
           </div>
         )}
 
-        {/* Selected Specimen Preview */}
-        <div className="bg-white/80 border-2 border-[#264653] rounded-xl p-3 mb-4 shadow-sm">
-          <div className="flex justify-between items-center mb-1">
-            <span className="text-xs font-bold text-[#264653] uppercase">Tu Espécimen Seleccionado:</span>
-            {organisms.length > 1 && (
-              <span className="text-[11px] text-gray-500">({organisms.length} disponibles)</span>
-            )}
+        {/* Selected Specimen & Clone Creator */}
+        <div className="bg-white/85 border-2 border-[#264653] rounded-xl p-3 mb-3 shadow-sm max-w-lg mx-auto w-full">
+          <div className="flex justify-between items-center mb-2">
+            <span className="text-xs font-bold text-[#264653] uppercase">
+              🧬 Tu Clon para la Carrera:
+            </span>
+            <button
+              onClick={handleGenerateNewClone}
+              className="text-xs bg-purple-600 hover:bg-purple-700 text-white font-bold px-2.5 py-1 rounded-lg cursor-pointer shadow flex items-center gap-1 transition active:scale-95"
+              title="Crea un clon mutante aleatorio con estadísticas y habilidades únicas"
+            >
+              + 🧬 Clonar Nuevo Espécimen
+            </button>
           </div>
 
           {selectedOrg ? (
-            <div className="flex items-center gap-3">
-              <CreatureSprite speciesId={selectedOrg.speciesId} mods={selectedOrg.mods} sizePx={64} />
+            <div className="flex items-center gap-3 bg-yellow-50/60 p-2 rounded-lg border border-yellow-200">
+              <CreatureSprite speciesId={selectedOrg.speciesId} mods={selectedOrg.mods} sizePx={60} />
               <div className="flex-1 text-xs">
-                <div className="font-bold text-base text-[#264653]">{selectedOrg.baseName}</div>
-                <div className="text-gray-600">
+                <div className="font-bold text-sm text-[#264653] flex items-center gap-1.5">
+                  {selectedOrg.baseName}
+                  {selectedOrg.mods.length > 0 && (
+                    <span className="text-[10px] bg-purple-100 text-purple-800 px-1.5 py-0.2 rounded border border-purple-300">
+                      {selectedOrg.mods.length} mutación(es)
+                    </span>
+                  )}
+                </div>
+                <div className="text-gray-600 font-mono text-[11px] mt-0.5">
                   Vel {Math.round(selectedOrg.stats.velocidad)} · Res {Math.round(selectedOrg.stats.resistencia)} · Rec{' '}
                   {Math.round(selectedOrg.stats.recuperacion)}
                 </div>
-                <div className="text-purple-700 font-bold mt-0.5">⚡ {selectedOrg.ability.name}</div>
+                <div className="text-purple-700 font-bold text-[11px] mt-0.5">
+                  ⚡ Habilidad: {selectedOrg.ability.name}
+                </div>
               </div>
             </div>
           ) : (
@@ -448,55 +540,182 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
                       : 'bg-gray-100 border-gray-300 text-gray-700 hover:bg-gray-200'
                   }`}
                 >
-                  {org.baseName} ({org.mods.length}m)
+                  {org.baseName}
                 </button>
               ))}
             </div>
           )}
         </div>
 
-        {/* Action Cards */}
-        <div className="flex flex-col gap-3 max-w-sm mx-auto w-full">
-          {/* Card 1: Create Room */}
-          <div className="bg-white border-3 border-[#264653] rounded-xl p-4 shadow text-center">
-            <h3 className="font-bold text-lg text-[#264653] mb-1">👑 CREAR NUEVA SALA</h3>
-            <p className="text-xs text-gray-600 mb-3">
-              Creá una sala y compartile el código o enlace directo a tu amigo. Con solo 2 jugadores ya compiten 1 vs 1.
-            </p>
+        {/* Tab Switcher: Public Lobbies vs Private Room */}
+        <div className="flex justify-center max-w-md mx-auto w-full mb-3">
+          <div className="bg-black/15 p-1 rounded-xl flex w-full border border-[#264653]/30">
             <button
-              onClick={handleCreateRoom}
-              disabled={!connected}
-              className="btn btn-primary w-full py-2.5 text-lg font-bold cursor-pointer"
+              onClick={() => setActiveTab('public')}
+              className={`flex-1 py-2 text-xs font-bold rounded-lg cursor-pointer transition ${
+                activeTab === 'public'
+                  ? 'bg-[#264653] text-yellow-300 shadow'
+                  : 'text-[#264653] hover:bg-white/40'
+              }`}
             >
-              CREAR SALA DE DUELO
+              🌍 LOBBYS PÚBLICOS (Encontrar Partida)
+            </button>
+            <button
+              onClick={() => setActiveTab('private')}
+              className={`flex-1 py-2 text-xs font-bold rounded-lg cursor-pointer transition ${
+                activeTab === 'private'
+                  ? 'bg-[#264653] text-yellow-300 shadow'
+                  : 'text-[#264653] hover:bg-white/40'
+              }`}
+            >
+              🔒 SALA PRIVADA (Con Amigos)
             </button>
           </div>
+        </div>
 
-          <div className="text-center font-bold text-sm text-[#264653] my-1">— O —</div>
+        {/* TAB 1: PUBLIC LOBBIES */}
+        {activeTab === 'public' && (
+          <div className="max-w-lg mx-auto w-full space-y-3">
+            <div className="bg-amber-100/90 border border-amber-300 text-amber-900 px-3 py-2 rounded-xl text-xs flex items-center justify-between shadow-sm">
+              <span>
+                🏁 <b>Salas Públicas Abiertas:</b> Tocá en cualquier arena para entrar. Si hay un rival, compiten al instante; si no, la sala queda abierta para que se una tu próximo retador.
+              </span>
+            </div>
 
-          {/* Card 2: Join Room with Code */}
-          <div className="bg-white border-3 border-[#264653] rounded-xl p-4 shadow text-center">
-            <h3 className="font-bold text-lg text-[#264653] mb-1">🎮 UNIRSE A UNA SALA</h3>
-            <p className="text-xs text-gray-600 mb-2">Ingresá el código de 4 caracteres que te pasó tu amigo:</p>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                placeholder="CÓDIGO (Ej: GEN4)"
-                value={inputCode}
-                onChange={e => setInputCode(e.target.value.toUpperCase())}
-                maxLength={6}
-                className="flex-1 uppercase font-mono text-center text-xl font-bold border-3 border-[#264653] rounded-lg p-2 bg-yellow-50 focus:outline-none focus:ring-2 focus:ring-amber-400"
-              />
-              <button
-                onClick={() => handleJoinRoom()}
-                disabled={!connected || !inputCode.trim()}
-                className="btn btn-fight px-4 py-2 text-base font-bold cursor-pointer"
-              >
-                UNIRSE
-              </button>
+            {/* Quick Public Arenas Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {PUBLIC_ARENAS.map(arena => (
+                <div
+                  key={arena.code}
+                  className="bg-white border-2 border-[#264653] rounded-xl p-3 shadow-sm hover:shadow-md transition flex flex-col justify-between"
+                >
+                  <div>
+                    <div className="flex justify-between items-center mb-1">
+                      <span className="font-bold text-sm text-[#264653]">{arena.name}</span>
+                      <span className="text-[10px] font-mono bg-amber-200 text-amber-900 px-1.5 py-0.5 rounded font-bold">
+                        {arena.code}
+                      </span>
+                    </div>
+                    <div className="text-[10px] font-bold text-teal-700 mb-1">{arena.tag}</div>
+                    <p className="text-[11px] text-gray-600 mb-2 leading-tight">{arena.desc}</p>
+                  </div>
+
+                  <button
+                    onClick={() => handleJoinPublicArena(arena.code)}
+                    disabled={!connected}
+                    className="btn btn-fight w-full py-1.5 text-xs font-bold cursor-pointer"
+                  >
+                    ⚔️ ENTRAR A COMPETIR
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            {/* Active rooms found on WebSocket server */}
+            {publicRooms.length > 0 && (
+              <div className="bg-white border-2 border-[#264653] rounded-xl p-3 shadow">
+                <div className="text-xs font-bold text-[#264653] mb-2 flex items-center justify-between">
+                  <span>📡 SALAS PÚBLICAS ACTIVAS EN VIVO:</span>
+                  <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-bold">
+                    {publicRooms.length} disponible(s)
+                  </span>
+                </div>
+                <div className="space-y-1.5">
+                  {publicRooms.map(pr => (
+                    <div
+                      key={pr.code}
+                      className="flex items-center justify-between p-2 rounded-lg bg-gray-50 border border-gray-200 text-xs"
+                    >
+                      <div>
+                        <span className="font-bold font-mono text-[#264653] mr-2">[{pr.code}]</span>
+                        <span className="text-gray-700">Anfitrión: {pr.hostName}</span>
+                        <span className="text-gray-500 ml-2">({pr.playerCount}/4 jugadores)</span>
+                      </div>
+                      <button
+                        onClick={() => handleJoinRoom(pr.code)}
+                        className="btn btn-action text-xs px-3 py-1 font-bold cursor-pointer"
+                      >
+                        UNIRSE
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Create custom public room */}
+            <div className="bg-white/80 border border-gray-300 rounded-xl p-3 text-center">
+              <span className="text-xs font-bold text-gray-700 block mb-1.5">
+                ¿Querés abrir una sala pública con tu propio código?
+              </span>
+              <div className="flex gap-2 max-w-xs mx-auto">
+                <input
+                  type="text"
+                  placeholder="Ej: COLIS"
+                  value={customPublicCode}
+                  onChange={e => setCustomPublicCode(e.target.value.toUpperCase())}
+                  maxLength={6}
+                  className="flex-1 uppercase font-mono text-center text-sm font-bold border-2 border-[#264653] rounded-lg p-1.5 bg-white"
+                />
+                <button
+                  onClick={() => {
+                    const code = customPublicCode.trim() || undefined;
+                    handleCreateRoom(code, true);
+                  }}
+                  disabled={!connected}
+                  className="btn btn-primary text-xs px-3 py-1.5 font-bold cursor-pointer"
+                >
+                  ABRIR LOBBY
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        )}
+
+        {/* TAB 2: PRIVATE ROOM WITH FRIENDS */}
+        {activeTab === 'private' && (
+          <div className="flex flex-col gap-3 max-w-sm mx-auto w-full">
+            {/* Card 1: Create Private Room */}
+            <div className="bg-white border-3 border-[#264653] rounded-xl p-4 shadow text-center">
+              <h3 className="font-bold text-lg text-[#264653] mb-1">👑 CREAR SALA PRIVADA</h3>
+              <p className="text-xs text-gray-600 mb-3">
+                Creá una sala y compartile el código o link directo a tu amigo. Con solo 2 jugadores ya compiten 1 vs 1.
+              </p>
+              <button
+                onClick={() => handleCreateRoom(undefined, false)}
+                disabled={!connected}
+                className="btn btn-primary w-full py-2.5 text-base font-bold cursor-pointer"
+              >
+                CREAR SALA PRIVADA
+              </button>
+            </div>
+
+            <div className="text-center font-bold text-sm text-[#264653] my-0.5">— O —</div>
+
+            {/* Card 2: Join Room with Code */}
+            <div className="bg-white border-3 border-[#264653] rounded-xl p-4 shadow text-center">
+              <h3 className="font-bold text-lg text-[#264653] mb-1">🎮 UNIRSE CON CÓDIGO</h3>
+              <p className="text-xs text-gray-600 mb-2">Ingresá el código de 4 caracteres de tu amigo:</p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="CÓDIGO (Ej: GEN4)"
+                  value={inputCode}
+                  onChange={e => setInputCode(e.target.value.toUpperCase())}
+                  maxLength={6}
+                  className="flex-1 uppercase font-mono text-center text-xl font-bold border-3 border-[#264653] rounded-lg p-2 bg-yellow-50 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                />
+                <button
+                  onClick={() => handleJoinRoom()}
+                  disabled={!connected || !inputCode.trim()}
+                  className="btn btn-fight px-4 py-2 text-base font-bold cursor-pointer"
+                >
+                  UNIRSE
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -619,10 +838,19 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
           )}
         </div>
 
-        {/* Change my organism picker inside lobby */}
-        {organisms.length > 1 && (
-          <div className="bg-white/90 border border-gray-300 rounded-xl p-2 mb-2 text-xs">
-            <span className="font-bold text-gray-700 mr-2">Cambiar mi espécimen:</span>
+        {/* Change my organism or clone a new one inside lobby */}
+        <div className="bg-white/90 border border-gray-300 rounded-xl p-2 mb-2 text-xs">
+          <div className="flex justify-between items-center mb-1">
+            <span className="font-bold text-gray-700">Tu espécimen para la carrera:</span>
+            <button
+              onClick={handleGenerateNewClone}
+              className="text-[11px] bg-purple-600 hover:bg-purple-700 text-white font-bold px-2.5 py-0.5 rounded cursor-pointer shadow flex items-center gap-1 transition active:scale-95"
+              title="Crea un clon mutante único con sus propios stats y habilidades"
+            >
+              + 🧬 Clonar Nuevo Espécimen
+            </button>
+          </div>
+          {organisms.length > 0 && (
             <div className="flex gap-1.5 overflow-x-auto pt-1">
               {organisms.map(org => (
                 <button
@@ -638,8 +866,8 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
                 </button>
               ))}
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
         {/* Quick Emotes and Chat */}
         <div className="bg-white/90 border-2 border-[#264653]/40 rounded-xl p-2 mb-2 flex-1 flex flex-col min-h-[140px] max-h-[180px]">
@@ -767,20 +995,39 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
               Líder: {leader.name}
             </div>
 
-            {/* Ability button */}
-            <button
-              onClick={handleUseAbility}
-              disabled={me?.usedAbility || (meRacer ? meRacer.fatigue >= 100 : true)}
-              className={`btn text-xs font-bold px-3 py-1.5 text-white border rounded cursor-pointer ${
-                me?.usedAbility || (meRacer && meRacer.fatigue >= 100)
-                  ? 'bg-gray-600 opacity-50 cursor-not-allowed border-gray-400'
-                  : 'bg-blue-600 hover:bg-blue-500 border-blue-300 shadow active:translate-y-0.5'
-              }`}
-            >
-              {me?.usedAbility
-                ? '¡USADA!'
-                : `[ESPACIO] ${me?.organism.ability.name.split(' ')[0] || 'HABILIDAD'}`}
-            </button>
+            {/* Actions: Turbo + Ability */}
+            <div className="flex items-center gap-1.5">
+              {/* Turbo boost button */}
+              <button
+                onClick={handleUseTurbo}
+                disabled={meRacer ? meRacer.fatigue >= 100 || meRacer.finished : true}
+                className={`btn text-xs font-bold px-2.5 py-1.5 text-white border rounded cursor-pointer transition ${
+                  meRacer && (meRacer.fatigue >= 100 || meRacer.finished)
+                    ? 'bg-gray-600 opacity-50 cursor-not-allowed border-gray-400'
+                    : turboFlash
+                      ? 'bg-amber-400 text-slate-900 border-yellow-200 scale-105 shadow-lg font-black'
+                      : 'bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 border-amber-300 shadow active:scale-95'
+                }`}
+                title="Presioná cualquier tecla para dar un empujón de turbo (genera fatiga)"
+              >
+                {turboFlash ? '⚡ ¡TURBO! 💨' : '⚡ TURBO'}
+              </button>
+
+              {/* Ability button */}
+              <button
+                onClick={handleUseAbility}
+                disabled={me?.usedAbility || (meRacer ? meRacer.fatigue >= 100 : true)}
+                className={`btn text-xs font-bold px-2.5 py-1.5 text-white border rounded cursor-pointer ${
+                  me?.usedAbility || (meRacer && meRacer.fatigue >= 100)
+                    ? 'bg-gray-600 opacity-50 cursor-not-allowed border-gray-400'
+                    : 'bg-blue-600 hover:bg-blue-500 border-blue-300 shadow active:translate-y-0.5'
+                }`}
+              >
+                {me?.usedAbility
+                  ? '¡USADA!'
+                  : `[ESPACIO] ${me?.organism.ability.name.split(' ')[0] || 'HABILIDAD'}`}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -815,13 +1062,14 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
                 >
                   {/* Name Tag */}
                   <div
-                    className={`text-[10px] px-1.5 py-0.2 rounded font-bold whitespace-nowrap shadow -mb-1 z-20 ${
+                    className={`text-[10px] px-1.5 py-0.2 rounded font-bold whitespace-nowrap shadow -mb-1 z-20 flex items-center gap-1 ${
                       isMe
                         ? 'bg-yellow-400 text-slate-900 border border-black'
                         : 'bg-black/75 text-white border border-white/40'
                     }`}
                   >
-                    {racer.name} {isMe && '(Vos)'}
+                    <span>{racer.name} {isMe && '(Vos)'}</span>
+                    {isMe && turboFlash && <span className="animate-ping text-xs">🔥</span>}
                   </div>
 
                   {/* Fatigue bar above racer */}
@@ -832,7 +1080,14 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
                     />
                   </div>
 
-                  <CreatureSprite speciesId={racer.org.speciesId} mods={racer.org.mods} sizePx={54} />
+                  <div className="relative">
+                    <CreatureSprite speciesId={racer.org.speciesId} mods={racer.org.mods} sizePx={54} />
+                    {isMe && turboFlash && (
+                      <div className="absolute -left-3 top-1/2 -translate-y-1/2 text-sm select-none pointer-events-none animate-bounce">
+                        💨
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             );
@@ -840,7 +1095,7 @@ export const DuelManager: React.FC<DuelManagerProps> = ({
         </div>
 
         <p className="text-[11px] text-center text-[#264653] font-medium mt-1">
-          Duelo en vivo contra tus amigos. Presioná <b>[ESPACIO]</b> o el botón para usar tu habilidad en el momento justo.
+          ⚡ Presioná <b>cualquier tecla</b> o el botón para tirar <b>TURBO</b> (¡cuidado con la fatiga!). Presioná <b>[ESPACIO]</b> para tu Habilidad.
         </p>
       </div>
     );

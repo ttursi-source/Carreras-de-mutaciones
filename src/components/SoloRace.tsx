@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Organism, Scientist } from '../types';
-import { BASE_ORGANISMS, GENE_MODS, ABILITIES } from '../data/gameData';
 import { CreatureSprite } from './CreatureSprite';
+import { generateRandomClone } from '../utils/cloneGenerator';
 
 interface SoloRaceProps {
   playerOrganism: Organism;
@@ -20,46 +20,13 @@ interface LocalRacer {
   isPlayer: boolean;
 }
 
-const SPEED_K = 0.0075;
-const FATIGUE_K = 0.9;
-const RECOVERY_K = 0.032;
-const TICK_MS = 150;
-const MAX_TICKS = 480;
+// Physics scaled so that even at max speed it takes >= 10 seconds to finish
+const SPEED_K = 0.0052;
+const FATIGUE_K = 0.70;
+const RECOVERY_K = 0.024;
+const TICK_MS = 100;
+const MAX_TICKS = 600;
 const FINISH = 100;
-
-function clamp(v: number): number {
-  return Math.max(5, Math.min(100, v));
-}
-
-function randSigned(n: number): number {
-  return Math.floor(Math.random() * (n * 2 + 1)) - n;
-}
-
-function buildEnemyOrganism(index: number): Organism {
-  const b = BASE_ORGANISMS[Math.floor(Math.random() * BASE_ORGANISMS.length)];
-  const count = 1 + Math.floor(Math.random() * 3);
-  const shuffled = [...GENE_MODS].sort(() => Math.random() - 0.5).slice(0, count);
-  const stats = { ...b.stats };
-
-  shuffled.forEach((mod, idx) => {
-    const w = [1, 0.7, 0.5, 0.35][idx] || 0.3;
-    const m = mod.randomMod
-      ? { velocidad: randSigned(12), resistencia: randSigned(12), recuperacion: randSigned(12) }
-      : mod.mods;
-    stats.velocidad = clamp(stats.velocidad + Math.round((m.velocidad || 0) * w));
-    stats.resistencia = clamp(stats.resistencia + Math.round((m.resistencia || 0) * w));
-    stats.recuperacion = clamp(stats.recuperacion + Math.round((m.recuperacion || 0) * w));
-  });
-
-  return {
-    id: `ai_${Date.now()}_${index}`,
-    baseName: b.name,
-    speciesId: b.id,
-    mods: shuffled,
-    stats,
-    ability: ABILITIES[Math.floor(Math.random() * ABILITIES.length)],
-  };
-}
 
 export const SoloRace: React.FC<SoloRaceProps> = ({
   playerOrganism,
@@ -72,6 +39,7 @@ export const SoloRace: React.FC<SoloRaceProps> = ({
   const [hasUsedAbility, setHasUsedAbility] = useState(false);
   const [raceActive, setRaceActive] = useState(true);
   const [tickCount, setTickCount] = useState(0);
+  const [isTurboActive, setIsTurboActive] = useState(false);
 
   const rosterRef = useRef<LocalRacer[]>([]);
   rosterRef.current = roster;
@@ -79,19 +47,19 @@ export const SoloRace: React.FC<SoloRaceProps> = ({
   activeEventRef.current = activeEvent;
   const raceActiveRef = useRef(raceActive);
   raceActiveRef.current = raceActive;
+  const lastTurboTimeRef = useRef<number>(0);
+  const turboTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Initialize racers
+  // Initialize racers with unique clones
   useEffect(() => {
-    const enemies = [
-      buildEnemyOrganism(0),
-      buildEnemyOrganism(1),
-      buildEnemyOrganism(2),
-    ];
+    const enemy1 = generateRandomClone('Rival A', playerOrganism.speciesId);
+    const enemy2 = generateRandomClone('Rival B', enemy1.speciesId);
+    const enemy3 = generateRandomClone('Rival C', enemy2.speciesId);
 
     const initialRoster: LocalRacer[] = [
       {
         key: 'player',
-        name: scientist.name,
+        name: `${scientist.name} (${playerOrganism.baseName.split(' ')[0]})`,
         org: playerOrganism,
         progress: 0,
         fatigue: 0,
@@ -100,8 +68,8 @@ export const SoloRace: React.FC<SoloRaceProps> = ({
       },
       {
         key: 'e0',
-        name: `Rival A (${enemies[0].baseName})`,
-        org: enemies[0],
+        name: enemy1.baseName,
+        org: enemy1,
         progress: 0,
         fatigue: 0,
         overheated: false,
@@ -109,8 +77,8 @@ export const SoloRace: React.FC<SoloRaceProps> = ({
       },
       {
         key: 'e1',
-        name: `Rival B (${enemies[1].baseName})`,
-        org: enemies[1],
+        name: enemy2.baseName,
+        org: enemy2,
         progress: 0,
         fatigue: 0,
         overheated: false,
@@ -118,8 +86,8 @@ export const SoloRace: React.FC<SoloRaceProps> = ({
       },
       {
         key: 'e2',
-        name: `Rival C (${enemies[2].baseName})`,
-        org: enemies[2],
+        name: enemy3.baseName,
+        org: enemy3,
         progress: 0,
         fatigue: 0,
         overheated: false,
@@ -133,6 +101,49 @@ export const SoloRace: React.FC<SoloRaceProps> = ({
     setTickCount(0);
   }, [playerOrganism, scientist]);
 
+  // Turbo handler: triggered by pressing any key or clicking the turbo button
+  const handleTurbo = () => {
+    if (!raceActiveRef.current) return;
+    const now = Date.now();
+    // Rate limit: max 1 turbo per 150ms
+    if (now - lastTurboTimeRef.current < 150) return;
+    lastTurboTimeRef.current = now;
+
+    const player = rosterRef.current.find(r => r.isPlayer);
+    if (!player || player.fatigue >= 100) return;
+
+    // Flash turbo visual state
+    setIsTurboActive(true);
+    if (turboTimerRef.current) clearTimeout(turboTimerRef.current);
+    turboTimerRef.current = setTimeout(() => setIsTurboActive(false), 260);
+
+    const nextRoster = rosterRef.current.map(r => {
+      if (r.isPlayer) {
+        return {
+          ...r,
+          progress: Math.min(FINISH, r.progress + 1.1),
+          fatigue: Math.min(100, r.fatigue + 2.2),
+          overheated: r.fatigue + 2.2 >= 100,
+        };
+      }
+      return r;
+    });
+
+    setRoster(nextRoster);
+
+    if (nextRoster.some(r => r.progress >= FINISH)) {
+      setRaceActive(false);
+      onFinishRace(
+        nextRoster.map(r => ({
+          name: r.name,
+          org: r.org,
+          progress: r.progress,
+          isPlayer: r.isPlayer,
+        }))
+      );
+    }
+  };
+
   // Ability handler
   const handleUseAbility = () => {
     if (hasUsedAbility || !raceActiveRef.current) return;
@@ -144,21 +155,21 @@ export const SoloRace: React.FC<SoloRaceProps> = ({
 
     const nextRoster = rosterRef.current.map(r => {
       if (r.isPlayer) {
-        if (ab.id === 'turbo') return { ...r, progress: r.progress + 15 };
+        if (ab.id === 'turbo') return { ...r, progress: Math.min(FINISH, r.progress + 14) };
         if (ab.id === 'cool') return { ...r, fatigue: 0 };
-        if (ab.id === 'absorb') return { ...r, progress: r.progress + 12 };
+        if (ab.id === 'absorb') return { ...r, progress: Math.min(FINISH, r.progress + 11) };
       } else {
         if (ab.id === 'confuse') {
           return {
             ...r,
-            progress: Math.max(0, r.progress - 10),
-            fatigue: Math.min(100, r.fatigue + 20),
+            progress: Math.max(0, r.progress - 8),
+            fatigue: Math.min(100, r.fatigue + 18),
           };
         }
         if (ab.id === 'absorb') {
           return {
             ...r,
-            progress: Math.max(0, r.progress - 5),
+            progress: Math.max(0, r.progress - 4),
             fatigue: Math.min(100, r.fatigue + 10),
           };
         }
@@ -181,12 +192,20 @@ export const SoloRace: React.FC<SoloRaceProps> = ({
     }
   };
 
-  // Keyboard shortcut: Spacebar
+  // Keyboard controls: Space for ability (if available) or turbo, ANY other key for turbo
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat) return; // Prevent continuous hold
       if (e.code === 'Space') {
         e.preventDefault();
-        handleUseAbility();
+        if (!hasUsedAbility) {
+          handleUseAbility();
+        } else {
+          handleTurbo();
+        }
+      } else {
+        // Any other key triggers turbo!
+        handleTurbo();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -206,7 +225,7 @@ export const SoloRace: React.FC<SoloRaceProps> = ({
         setActiveEvent(ev);
         setTimeout(() => setActiveEvent(null), 3000);
       }
-    }, 7000);
+    }, 8000);
 
     return () => clearInterval(eventTimer);
   }, []);
@@ -226,12 +245,12 @@ export const SoloRace: React.FC<SoloRaceProps> = ({
         const { velocidad: vel, resistencia: res, recuperacion: rec } = r.org.stats;
         const effort = r.fatigue >= 100 ? 0.25 : r.fatigue > 65 ? 0.65 : 1;
         let speed = vel * SPEED_K * effort;
-        if (activeEventRef.current?.id === 'favorable') speed *= 1.5;
+        if (activeEventRef.current?.id === 'favorable') speed *= 1.4;
 
         const newProgress = r.progress + speed;
 
         let gain = (vel * effort * FATIGUE_K) / Math.max(15, res);
-        if (activeEventRef.current?.id === 'calor') gain *= 1.6;
+        if (activeEventRef.current?.id === 'calor') gain *= 1.5;
         const decay = rec * RECOVERY_K;
         const newFatigue = Math.max(0, Math.min(100, r.fatigue + gain - decay));
         const overheated = newFatigue >= 100;
@@ -269,6 +288,8 @@ export const SoloRace: React.FC<SoloRaceProps> = ({
     roster[0] || { name: '-', progress: 0 }
   );
 
+  const secondsElapsed = (tickCount * (TICK_MS / 1000)).toFixed(1);
+
   return (
     <div className="flex-1 flex flex-col w-full h-full bg-gradient-to-b from-[#74b9ff] via-[#74b9ff]/60 to-[#55efc4] relative overflow-hidden select-none p-2">
       {/* Event Banner */}
@@ -284,14 +305,15 @@ export const SoloRace: React.FC<SoloRaceProps> = ({
           <button onClick={onExit} className="text-gray-300 hover:text-white cursor-pointer underline">
             ← Salir al Lab
           </button>
-          <span className="font-bold text-[#81ecec] tracking-wider">CARRERA SOLO · 4 CARRILES</span>
-          <span className="text-yellow-300">⚡ Carrera Automática</span>
+          <span className="font-bold text-[#81ecec] tracking-wider">CARRERA SOLO · 4 CLONES</span>
+          <span className="text-yellow-300 font-mono font-bold">⏱️ {secondsElapsed}s</span>
         </div>
 
-        <div className="flex items-center justify-between gap-2 mt-1">
-          <div className="flex items-center gap-1.5 flex-1">
-            <span className="text-xs font-bold text-red-300">FATIGA:</span>
-            <div className="flex-1 max-w-[100px] h-3 bg-gray-800 border border-gray-400 rounded-full overflow-hidden">
+        <div className="flex items-center justify-between gap-1.5 mt-1 flex-wrap">
+          {/* Fatigue Bar */}
+          <div className="flex items-center gap-1.5 flex-1 min-w-[120px]">
+            <span className="text-[11px] font-bold text-red-300">FATIGA:</span>
+            <div className="flex-1 h-3 bg-gray-800 border border-gray-400 rounded-full overflow-hidden">
               <div
                 className="h-full bg-gradient-to-r from-yellow-500 to-red-500 transition-all duration-150"
                 style={{ width: `${player ? Math.min(100, player.fatigue) : 0}%` }}
@@ -299,20 +321,34 @@ export const SoloRace: React.FC<SoloRaceProps> = ({
             </div>
           </div>
 
-          <div className="bg-amber-400 text-slate-900 px-3 py-0.5 rounded-full text-xs font-bold truncate max-w-[140px] border border-white shadow">
-            Líder: {leader.name.split(' ')[0]}
+          <div className="bg-amber-400 text-slate-900 px-2 py-0.5 rounded-full text-[11px] font-bold truncate max-w-[120px] border border-white shadow">
+            1º: {leader.name.split(' ')[0]}
           </div>
 
+          {/* Turbo Tap Button (Any key or tap) */}
+          <button
+            onClick={handleTurbo}
+            disabled={!raceActive || (player ? player.fatigue >= 100 : true)}
+            className={`text-xs font-bold px-2 py-1 text-white border rounded shadow active:scale-95 transition-transform cursor-pointer flex items-center gap-1 ${
+              isTurboActive
+                ? 'bg-amber-500 border-yellow-200 scale-105 ring-2 ring-yellow-400'
+                : 'bg-emerald-600 hover:bg-emerald-500 border-emerald-300'
+            }`}
+          >
+            <span>🚀</span> TURBO <span className="text-[10px] opacity-80">(Toca tecla)</span>
+          </button>
+
+          {/* Genetic Ability Button */}
           <button
             onClick={handleUseAbility}
             disabled={hasUsedAbility || (player ? player.fatigue >= 100 : true)}
-            className={`btn text-xs font-bold px-2.5 py-1 text-white border rounded ${
+            className={`btn text-xs font-bold px-2 py-1 text-white border rounded ${
               hasUsedAbility || (player && player.fatigue >= 100)
                 ? 'bg-gray-600 opacity-50 cursor-not-allowed border-gray-400'
                 : 'bg-blue-600 hover:bg-blue-500 cursor-pointer border-blue-300 shadow active:translate-y-0.5'
             }`}
           >
-            {hasUsedAbility ? '¡USADA!' : `[ESPACIO] ${playerOrganism.ability.name.split(' ')[0]}`}
+            {hasUsedAbility ? '¡HABILIDAD USADA!' : `✨ [ESPACIO] ${playerOrganism.ability.name.split(' ')[0]}`}
           </button>
         </div>
       </div>
@@ -331,11 +367,12 @@ export const SoloRace: React.FC<SoloRaceProps> = ({
         {/* 4 Lanes */}
         {roster.map((racer, index) => {
           const leftPercent = Math.min(84, (racer.progress / FINISH) * 84);
+          const isPlayerTurbo = racer.isPlayer && isTurboActive;
           return (
             <div
               key={racer.key}
               className={`relative h-[24%] border-b border-dashed border-white/30 flex items-center ${
-                index === 3 ? 'border-b-0 bg-yellow-400/10' : ''
+                racer.isPlayer ? 'bg-yellow-400/10' : ''
               }`}
             >
               <div
@@ -346,11 +383,12 @@ export const SoloRace: React.FC<SoloRaceProps> = ({
               >
                 {/* Name Tag */}
                 <div
-                  className={`text-[10px] px-1.5 py-0.2 rounded font-bold whitespace-nowrap shadow -mb-1 z-20 ${
+                  className={`text-[10px] px-1.5 py-0.2 rounded font-bold whitespace-nowrap shadow -mb-1 z-20 flex items-center gap-1 ${
                     racer.isPlayer ? 'bg-yellow-400 text-slate-900 border border-black' : 'bg-black/70 text-white'
                   }`}
                 >
                   {racer.name}
+                  {isPlayerTurbo && <span className="text-[10px] text-red-600 animate-bounce">⚡TURBO!</span>}
                 </div>
 
                 {/* Fatigue bar above racer */}
@@ -361,7 +399,12 @@ export const SoloRace: React.FC<SoloRaceProps> = ({
                   />
                 </div>
 
-                <CreatureSprite speciesId={racer.org.speciesId} mods={racer.org.mods} sizePx={54} />
+                <div className="relative">
+                  {isPlayerTurbo && (
+                    <div className="absolute -left-3 top-1 text-xs animate-ping">🔥</div>
+                  )}
+                  <CreatureSprite speciesId={racer.org.speciesId} mods={racer.org.mods} sizePx={54} />
+                </div>
               </div>
             </div>
           );
@@ -369,8 +412,9 @@ export const SoloRace: React.FC<SoloRaceProps> = ({
       </div>
 
       <p className="text-[11px] text-center text-[#264653] font-medium mt-1">
-        Carrera 100% automática según la genética de cada corredor. Presioná <b>[ESPACIO]</b> o hacé clic en la habilidad para usar tu ventaja.
+        ⌨️ <b>Presioná cualquier tecla</b> o el botón <b>🚀 TURBO</b> para un impulso extra (cuesta fatiga) · <b>[ESPACIO]</b> activa tu poder genético.
       </p>
     </div>
   );
 };
+

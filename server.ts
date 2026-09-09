@@ -50,6 +50,7 @@ interface DuelPlayer {
   usedAbility: boolean;
   ws: WebSocket;
   isHost: boolean;
+  lastTurbo?: number;
 }
 
 interface RacerState {
@@ -66,6 +67,7 @@ interface RacerState {
 
 interface DuelRoom {
   code: string;
+  isPublic: boolean;
   players: Map<string, DuelPlayer>;
   status: 'lobby' | 'countdown' | 'racing' | 'podium';
   countdownTimer: NodeJS.Timeout | null;
@@ -120,6 +122,7 @@ function getSanitizedRoom(room: DuelRoom) {
 
   return {
     code: room.code,
+    isPublic: room.isPublic,
     status: room.status,
     players: playersList,
     activeEvent: room.activeEvent,
@@ -139,11 +142,12 @@ function getSanitizedRoom(room: DuelRoom) {
   };
 }
 
-const SPEED_K = 0.0075;
-const FATIGUE_K = 0.9;
-const RECOVERY_K = 0.032;
-const TICK_MS = 150;
-const MAX_TICKS = 480;
+// Tuned so race lasts at least 10 to 16 seconds
+const SPEED_K = 0.0052;
+const FATIGUE_K = 0.70;
+const RECOVERY_K = 0.024;
+const TICK_MS = 100;
+const MAX_TICKS = 600;
 const FINISH = 100;
 
 function startDuelRace(room: DuelRoom) {
@@ -381,6 +385,7 @@ wss.on('connection', (ws: WebSocket) => {
 
         const room: DuelRoom = {
           code,
+          isPublic: data.isPublic !== false,
           players: new Map([[currentUserId, player]]),
           status: 'lobby',
           countdownTimer: null,
@@ -413,11 +418,60 @@ wss.on('connection', (ws: WebSocket) => {
         );
       } else if (data.type === 'JOIN_ROOM') {
         const code = (data.roomCode || '').toUpperCase().trim();
-        const room = rooms.get(code);
+        let room = rooms.get(code);
 
         if (!room) {
-          ws.send(JSON.stringify({ type: 'ERROR', message: `No se encontró la sala con código "${code}".` }));
-          return;
+          if (data.autoCreateIfMissing || code.startsWith('PUB')) {
+            currentRoomCode = code;
+            currentUserId = data.playerId || `p_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+            const player: DuelPlayer = {
+              id: currentUserId,
+              name: data.playerName || 'Científico',
+              avatarKey: data.avatarKey || 'LabOne',
+              organism: data.organism,
+              ready: true,
+              usedAbility: false,
+              ws,
+              isHost: true,
+            };
+
+            room = {
+              code,
+              isPublic: true,
+              players: new Map([[currentUserId, player]]),
+              status: 'lobby',
+              countdownTimer: null,
+              raceInterval: null,
+              eventInterval: null,
+              activeEvent: null,
+              tickCount: 0,
+              startTime: 0,
+              roster: [],
+              results: [],
+              chatMessages: [
+                {
+                  sender: 'SISTEMA',
+                  text: `Lobby público ${code} abierto. ¡Esperando rivales!`,
+                  time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                },
+              ],
+              rematchVotes: new Set(),
+            };
+            rooms.set(code, room);
+
+            ws.send(
+              JSON.stringify({
+                type: 'ROOM_CREATED',
+                roomCode: code,
+                playerId: currentUserId,
+                room: getSanitizedRoom(room),
+              })
+            );
+            return;
+          } else {
+            ws.send(JSON.stringify({ type: 'ERROR', message: `No se encontró la sala con código "${code}".` }));
+            return;
+          }
         }
 
         if (room.players.size >= 4) {
@@ -534,6 +588,48 @@ wss.on('connection', (ws: WebSocket) => {
         if (!player) return;
 
         handleAbilityUse(room, player);
+      } else if (data.type === 'USE_TURBO') {
+        if (!currentRoomCode || !currentUserId) return;
+        const room = rooms.get(currentRoomCode);
+        if (!room || room.status !== 'racing') return;
+        const player = room.players.get(currentUserId);
+        if (!player) return;
+        const racer = room.roster.find(r => r.playerId === currentUserId);
+        if (!racer || racer.finished || racer.fatigue >= 100) return;
+
+        const now = Date.now();
+        if (player.lastTurbo && now - player.lastTurbo < 150) return;
+        player.lastTurbo = now;
+
+        racer.progress = Math.min(FINISH, racer.progress + 1.0);
+        racer.fatigue = Math.min(100, racer.fatigue + 2.2);
+        racer.overheated = racer.fatigue >= 100;
+
+        broadcastToRoom(room, {
+          type: 'TURBO_TRIGGERED',
+          playerId: currentUserId,
+          roster: room.roster,
+        });
+      } else if (data.type === 'GET_PUBLIC_ROOMS') {
+        const publicRooms: any[] = [];
+        rooms.forEach((r, code) => {
+          if (r.isPublic && r.status === 'lobby' && r.players.size < 4) {
+            const host = Array.from(r.players.values()).find(p => p.isHost) || Array.from(r.players.values())[0];
+            if (host) {
+              publicRooms.push({
+                code,
+                hostName: host.name,
+                hostAvatarKey: host.avatarKey,
+                hostOrganismName: host.organism.baseName,
+                hostSpeciesId: host.organism.speciesId,
+                playerCount: r.players.size,
+                maxPlayers: 4,
+                status: r.status,
+              });
+            }
+          }
+        });
+        ws.send(JSON.stringify({ type: 'PUBLIC_ROOMS_LIST', rooms: publicRooms }));
       } else if (data.type === 'SEND_CHAT') {
         if (!currentRoomCode || !currentUserId) return;
         const room = rooms.get(currentRoomCode);

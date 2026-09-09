@@ -8,18 +8,56 @@ import { Facility } from './components/Facility';
 import { SoloRace } from './components/SoloRace';
 import { SoloPodium } from './components/SoloPodium';
 import { DuelManager } from './components/DuelManager';
+import { generateRandomClone } from './utils/cloneGenerator';
 
 type Screen = 'start' | 'scientist' | 'dilemma' | 'incubator' | 'facility' | 'solo_race' | 'solo_podium' | 'duel';
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>('start');
-  const [scientist, setScientist] = useState<Scientist>({
-    name: 'Científico/a',
-    avatarKey: 'LabOne',
+  const [scientist, setScientist] = useState<Scientist>(() => {
+    try {
+      const saved = localStorage.getItem('genlab_scientist');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to load scientist from localStorage', e);
+    }
+    return {
+      name: 'Científico/a',
+      avatarKey: 'LabOne',
+    };
   });
   const [scientistNameInput, setScientistNameInput] = useState('');
-  const [organisms, setOrganisms] = useState<Organism[]>([]);
-  const [selectedOrganism, setSelectedOrganism] = useState<Organism | null>(null);
+  const [organisms, setOrganisms] = useState<Organism[]>(() => {
+    try {
+      const saved = localStorage.getItem('genlab_organisms');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {
+      console.warn('Failed to load organisms from localStorage', e);
+    }
+    // Generate an initial unique custom clone
+    return [generateRandomClone('Lab')];
+  });
+  const [selectedOrganism, setSelectedOrganism] = useState<Organism | null>(() => organisms[0] || null);
+
+  // Save to localStorage on change
+  useEffect(() => {
+    try {
+      localStorage.setItem('genlab_organisms', JSON.stringify(organisms));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [organisms]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('genlab_scientist', JSON.stringify(scientist));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [scientist]);
 
   // Dilemma state
   const [dilemmaChoices, setDilemmaChoices] = useState<[BaseOrganism, BaseOrganism]>([

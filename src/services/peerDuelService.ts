@@ -9,11 +9,12 @@ export interface PeerDuelCallbacks {
 }
 
 const FINISH = 100;
-const SPEED_K = 0.055;
-const FATIGUE_K = 0.35;
-const RECOVERY_K = 0.0075;
-const TICK_MS = 60;
-const MAX_TICKS = 450;
+// Physics tuned so the race lasts at least 10 to 16 seconds
+const SPEED_K = 0.0050;
+const FATIGUE_K = 0.65;
+const RECOVERY_K = 0.022;
+const TICK_MS = 80;
+const MAX_TICKS = 550;
 
 export class PeerDuelService {
   private peer: Peer | null = null;
@@ -21,7 +22,9 @@ export class PeerDuelService {
   private isHost = false;
   private myPlayerId = '';
   private roomCode = '';
+  private isPublic = true;
   private callbacks: PeerDuelCallbacks;
+  private lastTurboTimes: Map<string, number> = new Map();
 
   // Host state
   private players: Map<
@@ -82,6 +85,7 @@ export class PeerDuelService {
 
     return {
       code: this.roomCode,
+      isPublic: this.isPublic,
       players: playersList,
       status: this.status,
       activeEvent: this.activeEvent,
@@ -104,10 +108,17 @@ export class PeerDuelService {
     }
   }
 
-  public createRoom(playerName: string, avatarKey: string, organism: Organism) {
+  public createRoom(
+    playerName: string,
+    avatarKey: string,
+    organism: Organism,
+    customCode?: string,
+    isPublic = true
+  ) {
     this.destroy();
     this.isHost = true;
-    this.roomCode = this.generateCode();
+    this.roomCode = (customCode ? customCode.trim().toUpperCase() : this.generateCode());
+    this.isPublic = isPublic;
     this.myPlayerId = 'p_' + Math.random().toString(36).substring(2, 8);
     const peerId = `genlab-${this.roomCode.toLowerCase()}`;
 
@@ -190,7 +201,13 @@ export class PeerDuelService {
     });
   }
 
-  public joinRoom(roomCode: string, playerName: string, avatarKey: string, organism: Organism) {
+  public joinRoom(
+    roomCode: string,
+    playerName: string,
+    avatarKey: string,
+    organism: Organism,
+    autoHostOnFail = false
+  ) {
     this.destroy();
     this.isHost = false;
     this.roomCode = roomCode.toUpperCase().trim();
@@ -210,9 +227,13 @@ export class PeerDuelService {
 
       const timeout = setTimeout(() => {
         if (!connection.open) {
-          this.callbacks.onError(`No se encontró la sala "${this.roomCode}". Verificá el código con tu amigo.`);
+          if (autoHostOnFail) {
+            this.createRoom(playerName, avatarKey, organism, this.roomCode, true);
+          } else {
+            this.callbacks.onError(`No se encontró la sala "${this.roomCode}". Verificá el código con tu amigo.`);
+          }
         }
-      }, 7000);
+      }, 5000);
 
       connection.on('open', () => {
         clearTimeout(timeout);
@@ -237,13 +258,21 @@ export class PeerDuelService {
 
       connection.on('error', err => {
         clearTimeout(timeout);
-        this.callbacks.onError('Error al conectar con la sala: ' + err.message);
+        if (autoHostOnFail) {
+          this.createRoom(playerName, avatarKey, organism, this.roomCode, true);
+        } else {
+          this.callbacks.onError('Error al conectar con la sala: ' + err.message);
+        }
       });
     });
 
     this.peer.on('error', (err: any) => {
       if (err.type === 'peer-unavailable') {
-        this.callbacks.onError(`No se encontró la sala "${this.roomCode}". Asegurate de que tu amigo esté en la sala.`);
+        if (autoHostOnFail) {
+          this.createRoom(playerName, avatarKey, organism, this.roomCode, true);
+        } else {
+          this.callbacks.onError(`No se encontró la sala "${this.roomCode}". Asegurate de que tu amigo esté en la sala.`);
+        }
       } else {
         this.callbacks.onError('Error P2P: ' + err.message);
       }
@@ -308,6 +337,11 @@ export class PeerDuelService {
       const guest = Array.from(this.players.values()).find(p => !p.isHost);
       if (guest) {
         this.hostUseAbility(guest.id);
+      }
+    } else if (msg.type === 'USE_TURBO') {
+      const guest = Array.from(this.players.values()).find(p => !p.isHost);
+      if (guest) {
+        this.hostUseTurbo(guest.id);
       }
     } else if (msg.type === 'SEND_CHAT') {
       const guest = Array.from(this.players.values()).find(p => !p.isHost);
@@ -566,6 +600,36 @@ export class PeerDuelService {
       playerId,
       abilityName: ab.name,
       message,
+      roster: this.roster,
+    });
+  }
+
+  public useTurbo() {
+    if (this.isHost) {
+      this.hostUseTurbo(this.myPlayerId);
+    } else if (this.conn && this.conn.open) {
+      this.conn.send({ type: 'USE_TURBO' });
+    }
+  }
+
+  private hostUseTurbo(playerId: string) {
+    if (this.status !== 'racing') return;
+    const racer = this.roster.find(r => r.playerId === playerId);
+    if (!racer || racer.finished || racer.fatigue >= 100) return;
+
+    const now = Date.now();
+    const last = this.lastTurboTimes.get(playerId) || 0;
+    if (now - last < 150) return; // 150ms cooldown
+    this.lastTurboTimes.set(playerId, now);
+
+    racer.progress = Math.min(FINISH, racer.progress + 1.0);
+    racer.fatigue = Math.min(100, racer.fatigue + 2.2);
+    racer.overheated = racer.fatigue >= 100;
+    racer.turboActive = true;
+
+    this.broadcast({
+      type: 'TURBO_TRIGGERED',
+      playerId,
       roster: this.roster,
     });
   }
