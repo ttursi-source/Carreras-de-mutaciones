@@ -1,0 +1,104 @@
+@import "tailwindcss";
+
+:root {
+  --bg-color: #202225;
+  --gb-light: #fdf6e3;
+  --gb-dark: #264653;
+  --gb-medium: #2a9d8f;
+  --primary-red: #e76f51;
+  --primary-yellow: #e9c46a;
+  --primary-purple: #7b5ea7;
+  --dialog-bg: #ffffff;
+  --text-color: #264653;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'VT323', monospace;
+  background-color: var(--bg-color);
+  background-image: radial-gradient(#141516 2px, transparent 2px);
+  background-size: 20px 20px;
+  color: var(--text-color);
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+#root {
+  width: 100%;
+  height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.pixel-text {
+  font-family: 'VT323', monospace;
+  letter-spacing: 1px;
+}
+
+.btn {
+  font-family: 'VT323', monospace;
+  background-color: #ddd;
+  color: var(--gb-dark);
+  border: 4px solid;
+  border-color: #fff #aaa #aaa #fff;
+  border-radius: 8px;
+  text-transform: uppercase;
+  box-shadow: 0 4px 0px var(--gb-dark);
+  transition: transform 0.1s, box-shadow 0.1s;
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(3px);
+  box-shadow: 0 1px 0 var(--gb-dark);
+  border-color: #aaa #fff #fff #aaa;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn-primary {
+  background: var(--primary-yellow);
+  color: #264653;
+  border-color: #fff2b2 #d4a73b #d4a73b #fff2b2;
+}
+
+.btn-action {
+  background: var(--gb-medium);
+  color: #fff;
+  border-color: #4eddc9 #1e7066 #1e7066 #4eddc9;
+}
+
+.btn-fight {
+  background: var(--primary-red);
+  color: #fff;
+  border-color: #ff9d85 #ba4f35 #ba4f35 #ff9d85;
+}
+
+.btn-danger {
+  background: #d63031;
+  color: #fff;
+  border-color: #ff8a80 #8e2323 #8e2323 #ff8a80;
+}
+
+/* Custom scrollbar for pixel look */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f1ebd8;
+}
+::-webkit-scrollbar-thumb {
+  background: #264653;
+  border-radius: 3px;
+}
